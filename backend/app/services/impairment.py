@@ -8,6 +8,7 @@ from app.config import settings
 logger = logging.getLogger("jetlag.impairment")
 
 _IS_LINUX = platform.system() == "Linux"
+_initialized = False
 
 
 class ImpairmentService:
@@ -34,12 +35,28 @@ class ImpairmentService:
         return f"1:{100 + profile_id}"
 
     @staticmethod
+    async def _iface_exists(iface: str) -> bool:
+        """Check if a network interface exists."""
+        _, _, rc = await ImpairmentService._run(f"ip link show {iface} 2>/dev/null")
+        return rc == 0
+
+    @staticmethod
     async def initialize():
         """Set up root qdisc on the LAN interface."""
+        global _initialized
         if not _IS_LINUX:
             logger.info("Skipping tc initialization (not Linux)")
             return
+
+        if not settings.setup_completed:
+            logger.info("Skipping tc initialization (setup not completed)")
+            return
+
         iface = settings.network.lan_interface
+
+        if not await ImpairmentService._iface_exists(iface):
+            logger.warning(f"LAN interface '{iface}' not found — skipping tc initialization")
+            return
 
         # Clear existing qdiscs (ignore errors if none exist)
         await ImpairmentService._run(f"tc qdisc del dev {iface} root 2>/dev/null")
@@ -57,6 +74,7 @@ class ImpairmentService:
             f"tc class add dev {iface} parent 1: classid 1:99 htb rate 1000mbit"
         )
 
+        _initialized = True
         logger.info(f"tc root qdisc initialized on {iface}")
 
     @staticmethod
@@ -71,6 +89,14 @@ class ImpairmentService:
         if not _IS_LINUX:
             logger.info(f"Skipping apply_profile (not Linux): {profile.name}")
             return None
+
+        # Lazy-initialize if tc hasn't been set up yet
+        if not _initialized:
+            await ImpairmentService.initialize()
+            if not _initialized:
+                logger.warning(f"Cannot apply profile '{profile.name}' — tc not initialized")
+                return "tc not initialized (LAN interface may not exist)"
+
         iface = settings.network.lan_interface
         pid = profile.id
         classid = ImpairmentService._build_classid(pid)
