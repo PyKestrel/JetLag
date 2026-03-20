@@ -116,6 +116,7 @@ export interface ImpairmentProfile {
   name: string;
   description: string | null;
   enabled: boolean;
+  direction: string;
   // Latency / Jitter
   latency_ms: number;
   jitter_ms: number;
@@ -146,6 +147,7 @@ export interface ImpairmentProfileCreate {
   name: string;
   description?: string;
   enabled?: boolean;
+  direction?: string;
   latency_ms?: number;
   jitter_ms?: number;
   latency_correlation?: number;

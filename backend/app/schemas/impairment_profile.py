@@ -25,6 +25,7 @@ class ImpairmentProfileCreate(BaseModel):
     name: str
     description: Optional[str] = None
     enabled: bool = False
+    direction: str = "outbound"  # outbound, inbound, both
     # Latency / Jitter
     latency_ms: int = 0
     jitter_ms: int = 0
@@ -53,6 +54,7 @@ class ImpairmentProfileUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+    direction: Optional[str] = None
     latency_ms: Optional[int] = None
     jitter_ms: Optional[int] = None
     latency_correlation: Optional[float] = None
@@ -76,6 +78,7 @@ class ImpairmentProfileResponse(BaseModel):
     name: str
     description: Optional[str]
     enabled: bool
+    direction: str
     latency_ms: int
     jitter_ms: int
     latency_correlation: float

@@ -9,6 +9,10 @@ logger = logging.getLogger("jetlag.impairment")
 
 _IS_LINUX = platform.system() == "Linux"
 _initialized = False
+_ifb_initialized = False
+
+# IFB device name used for inbound (ingress) shaping
+_IFB_DEV = "ifb0"
 
 
 class ImpairmentService:
@@ -39,6 +43,53 @@ class ImpairmentService:
         """Check if a network interface exists."""
         _, _, rc = await ImpairmentService._run(f"ip link show {iface} 2>/dev/null")
         return rc == 0
+
+    @staticmethod
+    async def _init_ifb(iface: str):
+        """Set up IFB device and ingress redirect for inbound shaping."""
+        global _ifb_initialized
+        if _ifb_initialized:
+            return
+
+        # Load the ifb kernel module
+        await ImpairmentService._run("modprobe ifb numifbs=1")
+
+        # Bring up the IFB device
+        await ImpairmentService._run(f"ip link set dev {_IFB_DEV} up")
+
+        # Clear any existing ingress qdisc on the real interface
+        await ImpairmentService._run(f"tc qdisc del dev {iface} ingress 2>/dev/null")
+
+        # Add ingress qdisc on the real interface
+        out, err, rc = await ImpairmentService._run(
+            f"tc qdisc add dev {iface} handle ffff: ingress"
+        )
+        if rc != 0:
+            logger.error(f"Failed to add ingress qdisc on {iface}: {err}")
+            return
+
+        # Redirect all ingress traffic to the IFB device
+        await ImpairmentService._run(
+            f"tc filter add dev {iface} parent ffff: protocol ip u32 "
+            f"match u32 0 0 action mirred egress redirect dev {_IFB_DEV}"
+        )
+
+        # Set up HTB root qdisc on the IFB device
+        await ImpairmentService._run(f"tc qdisc del dev {_IFB_DEV} root 2>/dev/null")
+        out, err, rc = await ImpairmentService._run(
+            f"tc qdisc add dev {_IFB_DEV} root handle 1: htb default 99"
+        )
+        if rc != 0:
+            logger.error(f"Failed to add root qdisc on {_IFB_DEV}: {err}")
+            return
+
+        # Default class on IFB: unlimited
+        await ImpairmentService._run(
+            f"tc class add dev {_IFB_DEV} parent 1: classid 1:99 htb rate 1000mbit"
+        )
+
+        _ifb_initialized = True
+        logger.info(f"IFB device {_IFB_DEV} initialized for inbound shaping on {iface}")
 
     @staticmethod
     async def initialize():
@@ -78,33 +129,15 @@ class ImpairmentService:
         logger.info(f"tc root qdisc initialized on {iface}")
 
     @staticmethod
-    async def apply_profile(profile) -> Optional[str]:
-        """Apply a tc/netem impairment profile.
-
-        Creates:
-          1. An HTB class for bandwidth shaping
-          2. A netem qdisc for latency/jitter/loss/corruption/reorder/duplication
-          3. tc filter rules based on match criteria
-        """
-        if not _IS_LINUX:
-            logger.info(f"Skipping apply_profile (not Linux): {profile.name}")
-            return None
-
-        # Lazy-initialize if tc hasn't been set up yet
-        if not _initialized:
-            await ImpairmentService.initialize()
-            if not _initialized:
-                logger.warning(f"Cannot apply profile '{profile.name}' — tc not initialized")
-                return "tc not initialized (LAN interface may not exist)"
-
-        iface = settings.network.lan_interface
+    async def _apply_on_device(dev: str, profile) -> Optional[str]:
+        """Apply HTB class + netem qdisc + filters on a specific device."""
         pid = profile.id
         classid = ImpairmentService._build_classid(pid)
 
         # Remove existing filters and class for this profile (if any)
-        await ImpairmentService._remove_filters(iface, pid)
+        await ImpairmentService._remove_filters(dev, pid)
         await ImpairmentService._run(
-            f"tc class del dev {iface} classid {classid} 2>/dev/null"
+            f"tc class del dev {dev} classid {classid} 2>/dev/null"
         )
 
         # Determine bandwidth rate
@@ -116,10 +149,10 @@ class ImpairmentService:
 
         # Add HTB class
         out, err, rc = await ImpairmentService._run(
-            f"tc class add dev {iface} parent 1: classid {classid} htb rate {rate} ceil {ceil}{burst}"
+            f"tc class add dev {dev} parent 1: classid {classid} htb rate {rate} ceil {ceil}{burst}"
         )
         if rc != 0:
-            logger.error(f"Failed to add HTB class for profile {pid}: {err}")
+            logger.error(f"Failed to add HTB class on {dev} for profile {pid}: {err}")
             return err
 
         # Build netem parameters — full tc/netem option set
@@ -173,21 +206,74 @@ class ImpairmentService:
         if netem_params:
             netem_str = " ".join(netem_params)
             out, err, rc = await ImpairmentService._run(
-                f"tc qdisc add dev {iface} parent {classid} netem {netem_str}"
+                f"tc qdisc add dev {dev} parent {classid} netem {netem_str}"
             )
             if rc != 0:
-                logger.error(f"Failed to add netem for profile {pid}: {err}")
+                logger.error(f"Failed to add netem on {dev} for profile {pid}: {err}")
                 return err
 
         # Add filters for match rules
         for rule in profile.match_rules:
-            filter_cmd = ImpairmentService._build_filter(iface, pid, classid, rule)
+            filter_cmd = ImpairmentService._build_filter(dev, pid, classid, rule)
             if filter_cmd:
                 out, err, rc = await ImpairmentService._run(filter_cmd)
                 if rc != 0:
-                    logger.warning(f"Failed to add filter for rule {rule.id}: {err}")
+                    logger.warning(f"Failed to add filter on {dev} for rule {rule.id}: {err}")
 
-        logger.info(f"Applied impairment profile {pid}: {profile.name}")
+        return None
+
+    @staticmethod
+    async def _remove_on_device(dev: str, profile_id: int):
+        """Remove HTB class + filters for a profile on a specific device."""
+        classid = ImpairmentService._build_classid(profile_id)
+        await ImpairmentService._remove_filters(dev, profile_id)
+        out, err, rc = await ImpairmentService._run(
+            f"tc class del dev {dev} classid {classid} 2>/dev/null"
+        )
+        if rc != 0:
+            logger.warning(f"Failed to remove class on {dev} for profile {profile_id}: {err}")
+
+    @staticmethod
+    async def apply_profile(profile) -> Optional[str]:
+        """Apply a tc/netem impairment profile.
+
+        Depending on profile.direction:
+          - 'outbound': apply on the LAN interface (egress)
+          - 'inbound':  apply on the IFB device (ingress via redirect)
+          - 'both':     apply on both devices
+        """
+        if not _IS_LINUX:
+            logger.info(f"Skipping apply_profile (not Linux): {profile.name}")
+            return None
+
+        # Lazy-initialize if tc hasn't been set up yet
+        if not _initialized:
+            await ImpairmentService.initialize()
+            if not _initialized:
+                logger.warning(f"Cannot apply profile '{profile.name}' — tc not initialized")
+                return "tc not initialized (LAN interface may not exist)"
+
+        iface = settings.network.lan_interface
+        direction = getattr(profile, 'direction', 'outbound') or 'outbound'
+        devices = []
+
+        if direction in ('outbound', 'both'):
+            devices.append(iface)
+        if direction in ('inbound', 'both'):
+            await ImpairmentService._init_ifb(iface)
+            if _ifb_initialized:
+                devices.append(_IFB_DEV)
+            else:
+                logger.error("Cannot apply inbound rules — IFB device not initialized")
+                if direction == 'inbound':
+                    return "IFB device initialization failed"
+
+        for dev in devices:
+            err = await ImpairmentService._apply_on_device(dev, profile)
+            if err:
+                return err
+
+        logger.info(f"Applied impairment profile {profile.id} ({direction}): {profile.name}")
         return None
 
     @staticmethod
@@ -245,27 +331,35 @@ class ImpairmentService:
         if not _IS_LINUX:
             logger.info(f"Skipping remove_profile (not Linux): {profile.name}")
             return None
+
         iface = settings.network.lan_interface
-        classid = ImpairmentService._build_classid(profile.id)
+        direction = getattr(profile, 'direction', 'outbound') or 'outbound'
 
-        # Remove filters first (before removing the class they reference)
-        await ImpairmentService._remove_filters(iface, profile.id)
+        # Remove from outbound (LAN interface)
+        if direction in ('outbound', 'both'):
+            await ImpairmentService._remove_on_device(iface, profile.id)
 
-        # Remove the HTB class (also removes child netem qdisc)
-        out, err, rc = await ImpairmentService._run(
-            f"tc class del dev {iface} classid {classid} 2>/dev/null"
-        )
-        if rc != 0:
-            logger.warning(f"Failed to remove class for profile {profile.id}: {err}")
+        # Remove from inbound (IFB device)
+        if direction in ('inbound', 'both') and _ifb_initialized:
+            await ImpairmentService._remove_on_device(_IFB_DEV, profile.id)
 
-        logger.info(f"Removed impairment profile {profile.id}: {profile.name}")
+        logger.info(f"Removed impairment profile {profile.id} ({direction}): {profile.name}")
         return None
 
     @staticmethod
     async def remove_all():
         """Tear down all tc rules and re-initialize."""
+        global _ifb_initialized
         if not _IS_LINUX:
             logger.info("Skipping remove_all (not Linux)")
             return
+
+        # Re-initialize outbound
         await ImpairmentService.initialize()
+
+        # Tear down IFB if it was set up
+        if _ifb_initialized:
+            await ImpairmentService._run(f"tc qdisc del dev {_IFB_DEV} root 2>/dev/null")
+            _ifb_initialized = False
+
         logger.info("All impairment profiles removed, tc re-initialized")

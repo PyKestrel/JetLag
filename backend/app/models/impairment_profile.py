@@ -11,6 +11,7 @@ class ImpairmentProfile(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    direction: Mapped[str] = mapped_column(String(10), default="outbound")  # outbound, inbound, both
 
     # ── Latency / Jitter ──
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)

@@ -22,7 +22,7 @@ const emptyRule: Omit<MatchRule, 'id' | 'profile_id'> = {
 }
 
 const emptyForm: ImpairmentProfileCreate = {
-  name: '', description: '', enabled: false,
+  name: '', description: '', enabled: false, direction: 'outbound',
   latency_ms: 0, jitter_ms: 0, latency_correlation: 0, latency_distribution: '',
   packet_loss_percent: 0, loss_correlation: 0,
   corruption_percent: 0, corruption_correlation: 0,
@@ -113,6 +113,7 @@ export default function ProfilesPage() {
       name: p.name,
       description: p.description || '',
       enabled: p.enabled,
+      direction: p.direction || 'outbound',
       latency_ms: p.latency_ms,
       jitter_ms: p.jitter_ms,
       latency_correlation: p.latency_correlation,
@@ -238,6 +239,7 @@ export default function ProfilesPage() {
               <thead>
                 <tr className="border-b border-border">
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Profile name</th>
+                  <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Direction</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Latency</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Loss</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Corrupt</th>
@@ -250,7 +252,7 @@ export default function ProfilesPage() {
               <tbody className="divide-y divide-border">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-10 text-center text-[13px] text-muted-foreground">
                       {search ? 'No profiles match your search' : 'No impairment profiles yet. Create one to get started.'}
                     </td>
                   </tr>
@@ -263,6 +265,7 @@ export default function ProfilesPage() {
                           {p.description && <p className="text-[12px] text-muted-foreground mt-0.5 truncate max-w-[250px]">{p.description}</p>}
                         </div>
                       </td>
+                      <td className="px-4 py-2.5 text-[13px] text-foreground capitalize">{p.direction || 'outbound'}</td>
                       <td className="px-4 py-2.5 text-[13px] text-foreground">{p.latency_ms > 0 ? `${p.latency_ms}ms${p.jitter_ms > 0 ? ` ±${p.jitter_ms}ms` : ''}` : '—'}</td>
                       <td className="px-4 py-2.5 text-[13px] text-foreground">{p.packet_loss_percent > 0 ? `${p.packet_loss_percent}%` : '—'}</td>
                       <td className="px-4 py-2.5 text-[13px] text-foreground">{p.corruption_percent > 0 ? `${p.corruption_percent}%` : '—'}</td>
@@ -468,6 +471,36 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
                     className={inputCls}
                     placeholder="Brief description of this impairment scenario"
                   />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border overflow-hidden mb-6">
+              <div className="bg-muted/40 px-5 py-3 border-b border-border">
+                <h3 className="text-[13px] font-semibold text-foreground">Traffic direction</h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Choose which direction of traffic this profile should impair</p>
+              </div>
+              <div className="p-5">
+                <div className="grid grid-cols-3 gap-3">
+                  {([
+                    { value: 'outbound', label: 'Outbound', desc: 'Egress traffic leaving the LAN interface' },
+                    { value: 'inbound', label: 'Inbound', desc: 'Ingress traffic arriving on the LAN interface (via IFB)' },
+                    { value: 'both', label: 'Both', desc: 'Apply impairments in both directions' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setForm({ ...form, direction: opt.value })}
+                      className={`text-left rounded-lg border p-4 transition-colors ${
+                        form.direction === opt.value
+                          ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                          : 'border-border hover:border-muted-foreground/30'
+                      }`}
+                    >
+                      <div className="text-[13px] font-semibold text-foreground">{opt.label}</div>
+                      <div className="text-[11px] text-muted-foreground mt-1">{opt.desc}</div>
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -722,6 +755,7 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
                     <tbody className="divide-y divide-border">
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Name</td><td className="px-5 py-2.5 font-medium text-foreground">{form.name}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Description</td><td className="px-5 py-2.5 text-foreground">{form.description || '—'}</td></tr>
+                      <tr><td className="px-5 py-2.5 text-muted-foreground">Direction</td><td className="px-5 py-2.5 font-medium text-foreground capitalize">{form.direction || 'outbound'}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Latency</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{(form.latency_ms || 0) > 0 ? `${form.latency_ms}ms${(form.jitter_ms || 0) > 0 ? ` ±${form.jitter_ms}ms` : ''}` : '—'}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Packet loss</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{(form.packet_loss_percent || 0) > 0 ? `${form.packet_loss_percent}%` : '—'}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Corruption</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{(form.corruption_percent || 0) > 0 ? `${form.corruption_percent}%` : '—'}</td></tr>

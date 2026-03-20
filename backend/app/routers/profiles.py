@@ -65,6 +65,7 @@ async def create_profile(
         name=data.name,
         description=data.description,
         enabled=data.enabled,
+        direction=data.direction,
         latency_ms=data.latency_ms,
         jitter_ms=data.jitter_ms,
         latency_correlation=data.latency_correlation,
