@@ -103,9 +103,22 @@ export default function OverviewPage() {
         />
         <StatCard
           label="dnsmasq"
-          value={d.services.dnsmasq.running ? 'Running' : d.services.dnsmasq.status === 'not available' || d.services.dnsmasq.status === 'not installed' ? 'Not available' : 'Stopped'}
-          sub={d.services.dnsmasq.status === 'not available' ? 'Requires Linux appliance' : d.services.dnsmasq.status === 'not installed' ? 'dnsmasq not installed' : d.services.dnsmasq.status}
-          color={d.services.dnsmasq.running ? 'bg-emerald-500' : d.services.dnsmasq.status === 'not available' || d.services.dnsmasq.status === 'not installed' ? 'bg-gray-400' : 'bg-red-500'}
+          value={
+            d.services.dnsmasq.running ? 'Running'
+            : ['not available', 'not installed', 'not configured'].includes(d.services.dnsmasq.status) ? 'Not available'
+            : 'Stopped'
+          }
+          sub={
+            d.services.dnsmasq.status === 'not available' ? 'Requires Linux appliance'
+            : d.services.dnsmasq.status === 'not installed' ? 'dnsmasq not installed'
+            : d.services.dnsmasq.status === 'not configured' ? 'Complete setup wizard first'
+            : d.services.dnsmasq.status
+          }
+          color={
+            d.services.dnsmasq.running ? 'bg-emerald-500'
+            : ['not available', 'not installed', 'not configured'].includes(d.services.dnsmasq.status) ? 'bg-gray-400'
+            : 'bg-red-500'
+          }
         />
       </div>
 

@@ -10,6 +10,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings, NetworkConfig, DHCPConfig, DNSConfig
+from app.services.dnsmasq import DnsmasqService
+from app.services.firewall import FirewallService
+from app.services.impairment import ImpairmentService
 
 logger = logging.getLogger("jetlag.setup")
 
@@ -194,20 +197,70 @@ async def complete_setup(payload: SetupRequest):
         f"LAN IP={payload.lan_ip}"
     )
 
-    # On a real Linux appliance, we would now:
-    # 1. Configure the LAN interface IP
-    #    await _run(f"ip addr flush dev {payload.lan_interface}")
-    #    await _run(f"ip addr add {payload.lan_ip}/{subnet_bits} dev {payload.lan_interface}")
-    #    await _run(f"ip link set {payload.lan_interface} up")
-    #
-    # 2. Generate and start dnsmasq (DHCP + DNS) on LAN
-    #    await DnsmasqService.generate_config()
-    #    await DnsmasqService.restart()
-    #
-    # 3. Initialize nftables firewall rules
-    #    await FirewallService.initialize()
-    #
-    # 4. Rebind uvicorn to LAN IP only (requires process restart or reverse proxy)
+    # Start services on Linux
+    services_started = []
+    services_failed = []
+
+    if platform.system() == "Linux":
+        # 1. Configure the LAN interface IP
+        try:
+            import ipaddress
+            net = ipaddress.IPv4Network(payload.lan_subnet, strict=False)
+            prefix_len = net.prefixlen
+            subprocess.run(
+                ["ip", "addr", "flush", "dev", payload.lan_interface],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["ip", "addr", "add", f"{payload.lan_ip}/{prefix_len}", "dev", payload.lan_interface],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["ip", "link", "set", payload.lan_interface, "up"],
+                capture_output=True, timeout=5,
+            )
+            services_started.append("lan_interface")
+            logger.info(f"LAN interface {payload.lan_interface} configured with {payload.lan_ip}/{prefix_len}")
+        except Exception as e:
+            logger.error(f"Failed to configure LAN interface: {e}")
+            services_failed.append(f"lan_interface: {e}")
+
+        # 2. Generate dnsmasq config and start the service
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+            services_started.append("dnsmasq")
+        except Exception as e:
+            logger.error(f"Failed to start dnsmasq: {e}")
+            services_failed.append(f"dnsmasq: {e}")
+
+        # 3. Initialize nftables firewall rules
+        try:
+            await FirewallService.initialize()
+            services_started.append("nftables")
+        except Exception as e:
+            logger.error(f"Failed to initialize firewall: {e}")
+            services_failed.append(f"nftables: {e}")
+
+        # 4. Initialize tc/netem root qdisc for impairment shaping
+        try:
+            await ImpairmentService.initialize()
+            services_started.append("tc_netem")
+        except Exception as e:
+            logger.error(f"Failed to initialize tc/netem: {e}")
+            services_failed.append(f"tc_netem: {e}")
+
+        # 5. Enable IP forwarding
+        try:
+            subprocess.run(
+                ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+                capture_output=True, timeout=5,
+            )
+            services_started.append("ip_forwarding")
+            logger.info("IP forwarding enabled")
+        except Exception as e:
+            logger.error(f"Failed to enable IP forwarding: {e}")
+            services_failed.append(f"ip_forwarding: {e}")
 
     return {
         "message": "Setup completed successfully",
@@ -215,11 +268,8 @@ async def complete_setup(payload: SetupRequest):
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "dns": settings.dns.model_dump(),
-        "services_note": (
-            "On a production Linux appliance, DHCP, DNS, and firewall services "
-            "would now be running on the LAN interface, and admin access would be "
-            "restricted to the LAN."
-        ),
+        "services_started": services_started,
+        "services_failed": services_failed,
     }
 
 

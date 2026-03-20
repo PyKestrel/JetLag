@@ -12,6 +12,8 @@ from starlette.responses import JSONResponse
 
 from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup
 from app.services.impairment import ImpairmentService
+from app.services.dnsmasq import DnsmasqService
+from app.services.firewall import FirewallService
 
 
 def setup_logging():
@@ -32,13 +34,46 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
 
-    # Initialize tc/netem root qdisc (no-op on non-Linux)
-    await ImpairmentService.initialize()
+    # Initialize services if setup was already completed (e.g., server restart)
+    from app.config import settings as cfg
+    import platform
 
-    # On a real Linux appliance, we'd also initialize:
-    # await FirewallService.initialize()
-    # await DnsmasqService.generate_config()
-    # await DnsmasqService.restart()
+    if cfg.setup_completed and platform.system() == "Linux":
+        # Initialize tc/netem root qdisc
+        try:
+            await ImpairmentService.initialize()
+            logger.info("tc/netem initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize tc/netem on startup: {e}")
+
+        # Start dnsmasq (generate config + restart)
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+            logger.info("dnsmasq started")
+        except Exception as e:
+            logger.error(f"Failed to start dnsmasq on startup: {e}")
+
+        # Initialize nftables firewall
+        try:
+            await FirewallService.initialize()
+            logger.info("nftables initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize firewall on startup: {e}")
+
+        # Enable IP forwarding
+        try:
+            import subprocess
+            subprocess.run(
+                ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+                capture_output=True, timeout=5,
+            )
+            logger.info("IP forwarding enabled")
+        except Exception as e:
+            logger.error(f"Failed to enable IP forwarding: {e}")
+    else:
+        # Still try to initialize tc (has its own platform + setup guard)
+        await ImpairmentService.initialize()
 
     yield
 

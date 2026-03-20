@@ -70,6 +70,9 @@ class DnsmasqService:
 
         config_content = "\n".join(lines) + "\n"
 
+        # Ensure log directory exists
+        Path("/var/log/jetlag").mkdir(parents=True, exist_ok=True)
+
         conf_path = Path(DNSMASQ_CONF_PATH)
         conf_path.parent.mkdir(parents=True, exist_ok=True)
         conf_path.write_text(config_content)
@@ -133,6 +136,11 @@ class DnsmasqService:
             )
             status_text = out.strip()
             active = status_text == "active"
-            return {"running": active, "status": status_text}
+            if active:
+                return {"running": True, "status": "active"}
+            # If setup hasn't been completed yet, show as not configured
+            if not settings.setup_completed:
+                return {"running": False, "status": "not configured"}
+            return {"running": False, "status": status_text}
         except Exception:
             return {"running": False, "status": "not installed"}
