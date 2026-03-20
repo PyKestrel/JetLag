@@ -116,10 +116,27 @@ export interface ImpairmentProfile {
   name: string;
   description: string | null;
   enabled: boolean;
+  // Latency / Jitter
   latency_ms: number;
   jitter_ms: number;
+  latency_correlation: number;
+  latency_distribution: string;
+  // Packet Loss
   packet_loss_percent: number;
+  loss_correlation: number;
+  // Corruption
+  corruption_percent: number;
+  corruption_correlation: number;
+  // Reordering
+  reorder_percent: number;
+  reorder_correlation: number;
+  // Duplication
+  duplicate_percent: number;
+  duplicate_correlation: number;
+  // Rate Control
   bandwidth_limit_kbps: number;
+  bandwidth_burst_kbytes: number;
+  bandwidth_ceil_kbps: number;
   match_rules: MatchRule[];
   created_at: string;
   updated_at: string;
@@ -131,8 +148,19 @@ export interface ImpairmentProfileCreate {
   enabled?: boolean;
   latency_ms?: number;
   jitter_ms?: number;
+  latency_correlation?: number;
+  latency_distribution?: string;
   packet_loss_percent?: number;
+  loss_correlation?: number;
+  corruption_percent?: number;
+  corruption_correlation?: number;
+  reorder_percent?: number;
+  reorder_correlation?: number;
+  duplicate_percent?: number;
+  duplicate_correlation?: number;
   bandwidth_limit_kbps?: number;
+  bandwidth_burst_kbytes?: number;
+  bandwidth_ceil_kbps?: number;
   match_rules?: Omit<MatchRule, 'id' | 'profile_id'>[];
 }
 

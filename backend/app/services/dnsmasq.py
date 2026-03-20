@@ -124,8 +124,15 @@ class DnsmasqService:
     @staticmethod
     async def status() -> dict:
         """Check dnsmasq service status."""
-        out, err, rc = await DnsmasqService._run(
-            "systemctl is-active dnsmasq"
-        )
-        active = out.strip() == "active"
-        return {"running": active, "status": out.strip()}
+        import platform
+        if platform.system() != "Linux":
+            return {"running": False, "status": "not available", "note": "dnsmasq requires Linux"}
+        try:
+            out, err, rc = await DnsmasqService._run(
+                "systemctl is-active dnsmasq"
+            )
+            status_text = out.strip()
+            active = status_text == "active"
+            return {"running": active, "status": status_text}
+        except Exception:
+            return {"running": False, "status": "not installed"}

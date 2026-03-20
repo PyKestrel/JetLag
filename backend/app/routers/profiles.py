@@ -67,8 +67,19 @@ async def create_profile(
         enabled=data.enabled,
         latency_ms=data.latency_ms,
         jitter_ms=data.jitter_ms,
+        latency_correlation=data.latency_correlation,
+        latency_distribution=data.latency_distribution,
         packet_loss_percent=data.packet_loss_percent,
+        loss_correlation=data.loss_correlation,
+        corruption_percent=data.corruption_percent,
+        corruption_correlation=data.corruption_correlation,
+        reorder_percent=data.reorder_percent,
+        reorder_correlation=data.reorder_correlation,
+        duplicate_percent=data.duplicate_percent,
+        duplicate_correlation=data.duplicate_correlation,
         bandwidth_limit_kbps=data.bandwidth_limit_kbps,
+        bandwidth_burst_kbytes=data.bandwidth_burst_kbytes,
+        bandwidth_ceil_kbps=data.bandwidth_ceil_kbps,
     )
     db.add(profile)
     await db.flush()

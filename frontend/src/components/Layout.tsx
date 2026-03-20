@@ -42,7 +42,6 @@ const navSections: NavSection[] = [
     defaultOpen: true,
     items: [
       { to: '/clients', label: 'Clients', icon: Monitor },
-      { to: '/profiles', label: 'Impairment Profiles', icon: Gauge },
     ],
   },
   {
@@ -50,7 +49,7 @@ const navSections: NavSection[] = [
     icon: Shield,
     defaultOpen: false,
     items: [
-      { to: '/captures', label: 'Captures', icon: FileDown },
+      { to: '/profiles', label: 'Impairment Profiles', icon: Gauge },
     ],
   },
   {
@@ -58,6 +57,7 @@ const navSections: NavSection[] = [
     icon: Bug,
     defaultOpen: false,
     items: [
+      { to: '/captures', label: 'Captures', icon: FileDown },
       { to: '/logs', label: 'Logs', icon: ScrollText },
     ],
   },
@@ -74,8 +74,8 @@ const navSections: NavSection[] = [
 const breadcrumbMap: Record<string, string[]> = {
   '/overview': ['Overview'],
   '/clients': ['Networks', 'Clients'],
-  '/profiles': ['Networks', 'Impairment Profiles'],
-  '/captures': ['Traffic policies', 'Captures'],
+  '/profiles': ['Traffic policies', 'Impairment Profiles'],
+  '/captures': ['Diagnostics', 'Captures'],
   '/logs': ['Diagnostics', 'Logs'],
   '/settings': ['Settings'],
 }

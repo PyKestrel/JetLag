@@ -24,6 +24,10 @@ $pyVer   = python --version 2>&1
 $nodeVer = node --version 2>&1
 Ok "$pyVer, Node $nodeVer"
 
+# ── System packages note (Windows) ────────────────────────────────
+Log "Windows detected — dnsmasq, nftables, and tcpdump are Linux-only."
+Log "Run the bash script (start-dev.sh) on a Linux machine for full functionality."
+
 # ── Backend setup ───────────────────────────────────────────────────
 Log "Setting up backend..."
 Push-Location $BackendDir

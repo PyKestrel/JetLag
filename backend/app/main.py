@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup
+from app.services.impairment import ImpairmentService
 
 
 def setup_logging():
@@ -31,9 +32,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
 
-    # On a real Linux appliance, we'd initialize network services here:
+    # Initialize tc/netem root qdisc (no-op on non-Linux)
+    await ImpairmentService.initialize()
+
+    # On a real Linux appliance, we'd also initialize:
     # await FirewallService.initialize()
-    # await ImpairmentService.initialize()
     # await DnsmasqService.generate_config()
     # await DnsmasqService.restart()
 

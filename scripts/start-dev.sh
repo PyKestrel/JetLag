@@ -29,6 +29,42 @@ PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.versi
 NODE_VER=$(node -v | sed 's/v//')
 ok "Python ${PYTHON_VER}, Node ${NODE_VER}"
 
+# ── Install system packages if missing (Linux only) ───────────────
+if [[ "$(uname)" == "Linux" ]]; then
+    MISSING_PKGS=()
+    command -v dnsmasq  >/dev/null 2>&1 || MISSING_PKGS+=(dnsmasq)
+    command -v nft      >/dev/null 2>&1 || MISSING_PKGS+=(nftables)
+    command -v tcpdump  >/dev/null 2>&1 || MISSING_PKGS+=(tcpdump)
+
+    if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+        log "Installing missing system packages: ${MISSING_PKGS[*]}"
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "${MISSING_PKGS[@]}"
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y -q "${MISSING_PKGS[@]}"
+        elif command -v yum >/dev/null 2>&1; then
+            sudo yum install -y -q "${MISSING_PKGS[@]}"
+        elif command -v pacman >/dev/null 2>&1; then
+            sudo pacman -S --noconfirm "${MISSING_PKGS[@]}"
+        else
+            fail "Cannot auto-install packages. Manually install: ${MISSING_PKGS[*]}"
+        fi
+        ok "System packages installed: ${MISSING_PKGS[*]}"
+    else
+        ok "System packages present (dnsmasq, nftables, tcpdump)"
+    fi
+
+    # Ensure dnsmasq is stopped until setup configures it
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        log "Stopping dnsmasq (will be configured via setup wizard)..."
+        sudo systemctl stop dnsmasq
+        sudo systemctl disable dnsmasq 2>/dev/null || true
+    fi
+else
+    log "Not Linux — skipping system package checks (dnsmasq, nftables, tcpdump)"
+fi
+
 # ── Backend setup ───────────────────────────────────────────────────
 log "Setting up backend..."
 

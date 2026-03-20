@@ -12,11 +12,32 @@ class ImpairmentProfile(Base):
     description: Mapped[str] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Impairment parameters
+    # ── Latency / Jitter ──
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     jitter_ms: Mapped[int] = mapped_column(Integer, default=0)
+    latency_correlation: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_distribution: Mapped[str] = mapped_column(String(20), default="")
+
+    # ── Packet Loss ──
     packet_loss_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    loss_correlation: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ── Packet Corruption ──
+    corruption_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    corruption_correlation: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ── Packet Reordering ──
+    reorder_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    reorder_correlation: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ── Packet Duplication ──
+    duplicate_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    duplicate_correlation: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ── Rate Control ──
     bandwidth_limit_kbps: Mapped[int] = mapped_column(Integer, default=0)
+    bandwidth_burst_kbytes: Mapped[int] = mapped_column(Integer, default=0)
+    bandwidth_ceil_kbps: Mapped[int] = mapped_column(Integer, default=0)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
