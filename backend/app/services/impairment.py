@@ -287,13 +287,13 @@ class ImpairmentService:
         # Use u32 filter for IP-based matching
         match_parts = []
 
-        if rule.src_ip:
+        if rule.src_ip and rule.src_ip != '0.0.0.0':
             match_parts.append(f"match ip src {ImpairmentService._normalize_ip(rule.src_ip)}")
-        if rule.dst_ip:
+        if rule.dst_ip and rule.dst_ip != '0.0.0.0':
             match_parts.append(f"match ip dst {ImpairmentService._normalize_ip(rule.dst_ip)}")
-        if rule.src_subnet:
+        if rule.src_subnet and rule.src_subnet != '0.0.0.0/0':
             match_parts.append(f"match ip src {rule.src_subnet}")
-        if rule.dst_subnet:
+        if rule.dst_subnet and rule.dst_subnet != '0.0.0.0/0':
             match_parts.append(f"match ip dst {rule.dst_subnet}")
         if rule.protocol == "tcp":
             match_parts.append("match ip protocol 6 0xff")
@@ -305,8 +305,8 @@ class ImpairmentService:
             match_parts.append(f"match ip dport {rule.port} 0xffff")
 
         if not match_parts:
-            # No specific criteria — match all
-            match_parts.append("match ip src 0.0.0.0/0")
+            # No specific criteria — match all traffic
+            match_parts.append("match u32 0 0 at 0")
 
         match_str = " ".join(match_parts)
         prio = 10 + profile_id

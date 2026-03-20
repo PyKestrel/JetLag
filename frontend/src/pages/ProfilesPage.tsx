@@ -16,9 +16,22 @@ import {
 } from '@/lib/api'
 
 /* ── Constants ──────────────────────────────────────────────────── */
+type RuleMatchType = 'ip' | 'subnet' | 'mac'
+const MATCH_TYPES: { value: RuleMatchType; label: string; desc: string }[] = [
+  { value: 'ip',     label: 'Single IP',   desc: 'Match traffic by specific source and/or destination IP address' },
+  { value: 'subnet', label: 'Subnet',       desc: 'Match traffic by source and/or destination subnet (CIDR)' },
+  { value: 'mac',    label: 'MAC Address',  desc: 'Match traffic by source MAC address' },
+]
+
 const emptyRule: Omit<MatchRule, 'id' | 'profile_id'> = {
   src_ip: null, dst_ip: null, src_subnet: null, dst_subnet: null,
   mac_address: null, vlan_id: null, protocol: null, port: null,
+}
+
+function inferMatchType(rule: Omit<MatchRule, 'id' | 'profile_id'>): RuleMatchType {
+  if (rule.mac_address) return 'mac'
+  if (rule.src_subnet || rule.dst_subnet) return 'subnet'
+  return 'ip'
 }
 
 const emptyForm: ImpairmentProfileCreate = {
@@ -101,9 +114,12 @@ export default function ProfilesPage() {
     [page]
   )
 
+  const [ruleTypes, setRuleTypes] = useState<RuleMatchType[]>([])
+
   const openCreate = () => {
     setEditingId(null)
     setForm({ ...emptyForm })
+    setRuleTypes([])
     setShowForm(true)
   }
 
@@ -133,16 +149,38 @@ export default function ProfilesPage() {
         src_ip, dst_ip, src_subnet, dst_subnet, mac_address, vlan_id, protocol, port,
       })),
     })
+    setRuleTypes(p.match_rules.map((r) => inferMatchType(r)))
     setShowForm(true)
   }
 
   const handleSave = async () => {
     setSaving(true)
+    // Normalize match rules: fill in defaults so tc filters always have valid targets
+    const normalizedRules = (form.match_rules || []).map((rule, idx) => {
+      const mt = ruleTypes[idx] || 'ip'
+      const r = { ...rule }
+      if (mt === 'ip') {
+        // For single IP: if both are empty, use 0.0.0.0 (match any)
+        if (!r.src_ip && !r.dst_ip && !r.protocol && !r.port && !r.vlan_id) {
+          r.src_ip = '0.0.0.0'
+        }
+        r.src_subnet = null; r.dst_subnet = null; r.mac_address = null
+      } else if (mt === 'subnet') {
+        // For subnet: default empty src to 0.0.0.0/0, empty dst to 0.0.0.0/0
+        if (!r.src_subnet) r.src_subnet = '0.0.0.0/0'
+        if (!r.dst_subnet) r.dst_subnet = '0.0.0.0/0'
+        r.src_ip = null; r.dst_ip = null; r.mac_address = null
+      } else if (mt === 'mac') {
+        r.src_ip = null; r.dst_ip = null; r.src_subnet = null; r.dst_subnet = null
+      }
+      return r
+    })
+    const payload = { ...form, match_rules: normalizedRules }
     try {
       if (editingId) {
-        await updateProfile(editingId, form)
+        await updateProfile(editingId, payload)
       } else {
-        await createProfile(form)
+        await createProfile(payload)
       }
       await refetch()
       // Don't close form here — the wizard will show the success screen
@@ -324,6 +362,8 @@ export default function ProfilesPage() {
           saving={saving}
           onSave={handleSave}
           onClose={() => setShowForm(false)}
+          ruleTypes={ruleTypes}
+          setRuleTypes={setRuleTypes}
         />
       )}
     </div>
@@ -334,13 +374,15 @@ export default function ProfilesPage() {
    Profile Wizard — Cloudflare-style multi-step create / edit
    ══════════════════════════════════════════════════════════════════ */
 
-function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
+function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose, ruleTypes, setRuleTypes }: {
   editingId: number | null
   form: ImpairmentProfileCreate
   setForm: (f: ImpairmentProfileCreate) => void
   saving: boolean
-  onSave: () => void
+  onSave: () => Promise<void>
   onClose: () => void
+  ruleTypes: RuleMatchType[]
+  setRuleTypes: React.Dispatch<React.SetStateAction<RuleMatchType[]>>
 }) {
   const [step, setStep] = useState<WizardStepId>('info')
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -376,6 +418,26 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
     const rules = [...(form.match_rules || [])]
     rules.splice(idx, 1)
     setForm({ ...form, match_rules: rules })
+    setRuleTypes((prev) => { const n = [...prev]; n.splice(idx, 1); return n })
+  }
+
+  const setRuleType = (idx: number, type: RuleMatchType) => {
+    setRuleTypes((prev) => { const n = [...prev]; n[idx] = type; return n })
+    // Clear fields that don't belong to the new type
+    const cleared: Record<string, unknown> = {}
+    if (type === 'ip') {
+      cleared.src_subnet = null; cleared.dst_subnet = null; cleared.mac_address = null
+    } else if (type === 'subnet') {
+      cleared.src_ip = null; cleared.dst_ip = null; cleared.mac_address = null
+    } else if (type === 'mac') {
+      cleared.src_ip = null; cleared.dst_ip = null; cleared.src_subnet = null; cleared.dst_subnet = null
+    }
+    updateRule(idx, cleared)
+  }
+
+  const addRule = () => {
+    setForm({ ...form, match_rules: [...(form.match_rules || []), { ...emptyRule }] })
+    setRuleTypes((prev) => [...prev, 'ip'])
   }
 
   /* ── Summary helpers ── */
@@ -665,7 +727,7 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
               <span className="text-[13px] font-medium text-foreground">{(form.match_rules || []).length} rule{(form.match_rules || []).length !== 1 ? 's' : ''} defined</span>
               <button
                 type="button"
-                onClick={() => setForm({ ...form, match_rules: [...(form.match_rules || []), { ...emptyRule }] })}
+                onClick={addRule}
                 className="inline-flex items-center gap-1.5 px-3 py-[6px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 <Plus className="h-3.5 w-3.5" /> Add rule
@@ -680,7 +742,9 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
             )}
 
             <div className="space-y-4">
-              {(form.match_rules || []).map((rule, idx) => (
+              {(form.match_rules || []).map((rule, idx) => {
+                const matchType = ruleTypes[idx] || 'ip'
+                return (
                 <div key={idx} className="rounded-lg border border-border overflow-hidden">
                   <div className="bg-muted/40 px-5 py-3 border-b border-border flex items-center justify-between">
                     <h3 className="text-[13px] font-semibold text-foreground">Rule {idx + 1}</h3>
@@ -688,47 +752,95 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  <div className="p-5 grid grid-cols-2 gap-4">
-                    <div>
-                      <label className={labelCls}>Source IP</label>
-                      <input type="text" value={rule.src_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_ip: e.target.value || null })} placeholder="e.g. 10.0.1.50" className={inputCls} />
+                  <div className="p-5">
+                    {/* Match type selector */}
+                    <div className="mb-5">
+                      <label className={labelCls}>Match type</label>
+                      <div className="grid grid-cols-3 gap-3 mt-1">
+                        {MATCH_TYPES.map((mt) => (
+                          <button
+                            key={mt.value}
+                            type="button"
+                            onClick={() => setRuleType(idx, mt.value)}
+                            className={`text-left rounded-lg border p-3 transition-colors ${
+                              matchType === mt.value
+                                ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                                : 'border-border hover:border-muted-foreground/30'
+                            }`}
+                          >
+                            <div className="text-[13px] font-semibold text-foreground">{mt.label}</div>
+                            <div className="text-[11px] text-muted-foreground mt-0.5">{mt.desc}</div>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div>
-                      <label className={labelCls}>Destination IP</label>
-                      <input type="text" value={rule.dst_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_ip: e.target.value || null })} placeholder="e.g. 8.8.8.8" className={inputCls} />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Source Subnet</label>
-                      <input type="text" value={rule.src_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_subnet: e.target.value || null })} placeholder="e.g. 10.0.1.0/24" className={inputCls} />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Destination Subnet</label>
-                      <input type="text" value={rule.dst_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_subnet: e.target.value || null })} placeholder="e.g. 192.168.0.0/16" className={inputCls} />
-                    </div>
-                    <div>
-                      <label className={labelCls}>MAC Address</label>
-                      <input type="text" value={rule.mac_address || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { mac_address: e.target.value || null })} placeholder="e.g. aa:bb:cc:dd:ee:ff" className={inputCls} />
-                    </div>
-                    <div>
-                      <label className={labelCls}>VLAN ID</label>
-                      <input type="number" min={0} max={4094} value={rule.vlan_id ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { vlan_id: e.target.value ? Number(e.target.value) : null })} placeholder="e.g. 100" className={inputCls} />
-                    </div>
-                    <div>
-                      <label className={labelCls}>Protocol</label>
-                      <select value={rule.protocol || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateRule(idx, { protocol: e.target.value || null })} className={inputCls}>
-                        <option value="">Any</option>
-                        <option value="tcp">TCP</option>
-                        <option value="udp">UDP</option>
-                        <option value="icmp">ICMP</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Port</label>
-                      <input type="number" min={0} max={65535} value={rule.port ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { port: e.target.value ? Number(e.target.value) : null })} placeholder="e.g. 443" className={inputCls} />
+
+                    {/* Type-specific fields */}
+                    {matchType === 'ip' && (
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className={labelCls}>Source IP</label>
+                          <input type="text" value={rule.src_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_ip: e.target.value || null })} placeholder="e.g. 10.0.1.50" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Destination IP</label>
+                          <input type="text" value={rule.dst_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_ip: e.target.value || null })} placeholder="e.g. 8.8.8.8" className={inputCls} />
+                        </div>
+                      </div>
+                    )}
+
+                    {matchType === 'subnet' && (
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className={labelCls}>Source Subnet</label>
+                          <input type="text" value={rule.src_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_subnet: e.target.value || null })} placeholder="10.100.123.0/24" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>Destination Subnet</label>
+                          <input type="text" value={rule.dst_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_subnet: e.target.value || null })} placeholder="0.0.0.0/0" className={inputCls} />
+                        </div>
+                      </div>
+                    )}
+
+                    {matchType === 'mac' && (
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className={labelCls}>MAC Address</label>
+                          <input type="text" value={rule.mac_address || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { mac_address: e.target.value || null })} placeholder="e.g. aa:bb:cc:dd:ee:ff" className={inputCls} />
+                        </div>
+                        <div>
+                          <label className={labelCls}>VLAN ID</label>
+                          <input type="number" min={0} max={4094} value={rule.vlan_id ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { vlan_id: e.target.value ? Number(e.target.value) : null })} placeholder="e.g. 100" className={inputCls} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Common fields: VLAN (for ip/subnet), Protocol, Port */}
+                    <div className="grid grid-cols-2 gap-4">
+                      {matchType !== 'mac' && (
+                        <div>
+                          <label className={labelCls}>VLAN ID</label>
+                          <input type="number" min={0} max={4094} value={rule.vlan_id ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { vlan_id: e.target.value ? Number(e.target.value) : null })} placeholder="e.g. 100" className={inputCls} />
+                        </div>
+                      )}
+                      <div>
+                        <label className={labelCls}>Protocol</label>
+                        <select value={rule.protocol || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateRule(idx, { protocol: e.target.value || null })} className={inputCls}>
+                          <option value="">Any</option>
+                          <option value="tcp">TCP</option>
+                          <option value="udp">UDP</option>
+                          <option value="icmp">ICMP</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelCls}>Port</label>
+                        <input type="number" min={0} max={65535} value={rule.port ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { port: e.target.value ? Number(e.target.value) : null })} placeholder="e.g. 443" className={inputCls} />
+                      </div>
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
@@ -762,7 +874,35 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose }: {
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Reordering</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{(form.reorder_percent || 0) > 0 ? `${form.reorder_percent}%` : '—'}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Duplication</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{(form.duplicate_percent || 0) > 0 ? `${form.duplicate_percent}%` : '—'}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Bandwidth</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{hasRate ? `${form.bandwidth_limit_kbps} kbps` : 'Unlimited'}</td></tr>
-                      <tr><td className="px-5 py-2.5 text-muted-foreground">Match rules</td><td className="px-5 py-2.5 font-medium text-foreground">{(form.match_rules || []).length > 0 ? `${(form.match_rules || []).length} rule(s)` : 'All traffic'}</td></tr>
+                      <tr>
+                        <td className="px-5 py-2.5 text-muted-foreground align-top">Match rules</td>
+                        <td className="px-5 py-2.5 font-medium text-foreground">
+                          {(form.match_rules || []).length === 0
+                            ? 'All traffic'
+                            : (form.match_rules || []).map((r, i) => {
+                                const mt = ruleTypes[i] || inferMatchType(r)
+                                const parts: string[] = []
+                                if (mt === 'ip') {
+                                  if (r.src_ip) parts.push(`src ${r.src_ip}`)
+                                  if (r.dst_ip) parts.push(`dst ${r.dst_ip}`)
+                                } else if (mt === 'subnet') {
+                                  if (r.src_subnet) parts.push(`src ${r.src_subnet}`)
+                                  if (r.dst_subnet) parts.push(`dst ${r.dst_subnet}`)
+                                } else if (mt === 'mac') {
+                                  if (r.mac_address) parts.push(`mac ${r.mac_address}`)
+                                }
+                                if (r.protocol) parts.push(r.protocol.toUpperCase())
+                                if (r.port) parts.push(`port ${r.port}`)
+                                if (r.vlan_id) parts.push(`vlan ${r.vlan_id}`)
+                                return (
+                                  <div key={i} className="text-[12px] font-mono">
+                                    Rule {i + 1}: {parts.length > 0 ? parts.join(', ') : 'match all'}
+                                  </div>
+                                )
+                              })
+                          }
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
