@@ -64,6 +64,7 @@ class LoggingConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    setup_completed: bool = False
     network: NetworkConfig = NetworkConfig()
     dhcp: DHCPConfig = DHCPConfig()
     vlans: list[VLANConfig] = []

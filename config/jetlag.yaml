@@ -1,6 +1,8 @@
 # JetLag Appliance Configuration
 # ================================
 
+setup_completed: false
+
 appliance:
   hostname: jetlag
   timezone: UTC

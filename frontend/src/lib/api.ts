@@ -69,6 +69,14 @@ export const getSettings = () => request<SettingsData>('/settings');
 export const updateSettings = (data: Partial<SettingsData>) =>
   request<SettingsData & { message: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) });
 
+// Setup
+export const getSetupStatus = () => request<SetupStatus>('/setup/status');
+export const getSetupInterfaces = () => request<{ interfaces: NetworkInterface[] }>('/setup/interfaces');
+export const completeSetup = (data: SetupRequest) =>
+  request<SetupCompleteResponse>('/setup/complete', { method: 'POST', body: JSON.stringify(data) });
+export const resetSetup = () =>
+  request<{ message: string; setup_completed: boolean }>('/setup/reset', { method: 'POST' });
+
 // Types
 export interface PaginatedResponse<T> {
   items: T[];
@@ -223,6 +231,42 @@ export interface SettingsLogging {
   file: string;
   max_size_mb: number;
   backup_count: number;
+}
+
+export interface SetupStatus {
+  setup_completed: boolean;
+  wan_interface: string | null;
+  lan_interface: string | null;
+  lan_ip: string | null;
+}
+
+export interface NetworkInterface {
+  name: string;
+  mac: string;
+  state: string;
+  ipv4_addresses: string[];
+  has_link: boolean;
+}
+
+export interface SetupRequest {
+  wan_interface: string;
+  lan_interface: string;
+  lan_ip?: string;
+  lan_subnet?: string;
+  dhcp_enabled?: boolean;
+  dhcp_range_start?: string;
+  dhcp_range_end?: string;
+  dhcp_lease_time?: string;
+  dns_upstream?: string[];
+}
+
+export interface SetupCompleteResponse {
+  message: string;
+  setup_completed: boolean;
+  network: SettingsNetwork;
+  dhcp: SettingsDHCP;
+  dns: SettingsDNS;
+  services_note: string;
 }
 
 export interface SettingsData {

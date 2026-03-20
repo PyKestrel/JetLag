@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import OverviewPage from './pages/OverviewPage'
@@ -6,8 +7,32 @@ import ProfilesPage from './pages/ProfilesPage'
 import CapturesPage from './pages/CapturesPage'
 import LogsPage from './pages/LogsPage'
 import SettingsPage from './pages/SettingsPage'
+import SetupWizard from './pages/SetupWizard'
+import { getSetupStatus } from './lib/api'
 
 export default function App() {
+  const [setupDone, setSetupDone] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    getSetupStatus()
+      .then((s) => setSetupDone(s.setup_completed))
+      .catch(() => setSetupDone(false))
+  }, [])
+
+  // Loading state while checking setup status
+  if (setupDone === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    )
+  }
+
+  // Show setup wizard if not yet configured
+  if (!setupDone) {
+    return <SetupWizard onComplete={() => setSetupDone(true)} />
+  }
+
   return (
     <Routes>
       <Route element={<Layout />}>

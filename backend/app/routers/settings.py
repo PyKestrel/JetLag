@@ -34,6 +34,7 @@ def _config_path() -> Path:
 @router.get("", response_model=dict)
 async def get_settings():
     return {
+        "setup_completed": settings.setup_completed,
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "vlans": [v.model_dump() for v in settings.vlans],
@@ -81,6 +82,7 @@ async def update_settings(payload: SettingsUpdate):
 
     # Serialize back to YAML
     config_data = {
+        "setup_completed": settings.setup_completed,
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "vlans": [v.model_dump() for v in settings.vlans],
