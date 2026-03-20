@@ -1,0 +1,60 @@
+# JetLag Appliance Configuration
+# ================================
+
+appliance:
+  hostname: jetlag
+  timezone: UTC
+
+network:
+  wan_interface: eth0
+  lan_interface: eth1
+  lan_ip: 10.0.1.1
+  lan_subnet: 10.0.1.0/24
+
+dhcp:
+  enabled: true
+  range_start: 10.0.1.100
+  range_end: 10.0.1.250
+  lease_time: 1h
+  gateway: 10.0.1.1
+  dns_server: 10.0.1.1
+
+vlans: []
+  # - id: 10
+  #   name: "economy-class"
+  #   interface: eth1.10
+  #   ip: 10.0.10.1
+  #   subnet: 10.0.10.0/24
+  #   dhcp_range_start: 10.0.10.100
+  #   dhcp_range_end: 10.0.10.250
+
+dns:
+  # When spoofing is active, all queries resolve to the portal IP
+  spoof_target: 10.0.1.1
+  upstream_servers:
+    - 1.1.1.1
+    - 8.8.8.8
+
+portal:
+  # Port the captive portal HTTP server listens on
+  http_port: 80
+  https_port: 443
+  # Self-signed cert settings
+  ssl_cert: /etc/jetlag/ssl/portal.crt
+  ssl_key: /etc/jetlag/ssl/portal.key
+  ssl_cn: "wifi.airline.com"
+
+admin:
+  api_port: 8080
+  # Frontend dev server (dev only)
+  frontend_port: 3000
+
+captures:
+  output_dir: /var/lib/jetlag/captures
+  max_file_size_mb: 100
+
+logging:
+  level: INFO
+  file: /var/log/jetlag/jetlag.log
+  max_size_mb: 50
+  backup_count: 5

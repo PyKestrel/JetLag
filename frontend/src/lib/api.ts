@@ -1,0 +1,237 @@
+const API_BASE = '/api';
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+// Overview
+export const getOverview = () => request<OverviewData>('/overview');
+
+// Clients
+export const getClients = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<Client>>(`/clients${qs}`);
+};
+export const getClient = (id: number) => request<Client>(`/clients/${id}`);
+export const authenticateClient = (id: number) =>
+  request<Client>(`/clients/${id}/authenticate`, { method: 'POST' });
+export const deauthenticateClient = (id: number) =>
+  request<Client>(`/clients/${id}/deauthenticate`, { method: 'POST' });
+export const bulkResetClients = () =>
+  request<{ message: string; count: number }>('/clients/bulk/reset', { method: 'POST' });
+
+// Impairment Profiles
+export const getProfiles = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<ImpairmentProfile>>(`/profiles${qs}`);
+};
+export const getProfile = (id: number) => request<ImpairmentProfile>(`/profiles/${id}`);
+export const createProfile = (data: ImpairmentProfileCreate) =>
+  request<ImpairmentProfile>('/profiles', { method: 'POST', body: JSON.stringify(data) });
+export const updateProfile = (id: number, data: Partial<ImpairmentProfileCreate>) =>
+  request<ImpairmentProfile>(`/profiles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteProfile = (id: number) =>
+  request<{ message: string }>(`/profiles/${id}`, { method: 'DELETE' });
+
+// Captures
+export const getCaptures = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<Capture>>(`/captures${qs}`);
+};
+export const startCapture = (data: CaptureCreate) =>
+  request<Capture>('/captures', { method: 'POST', body: JSON.stringify(data) });
+export const stopCapture = (id: number) =>
+  request<Capture>(`/captures/${id}/stop`, { method: 'POST' });
+export const deleteCapture = (id: number) =>
+  request<{ message: string }>(`/captures/${id}`, { method: 'DELETE' });
+export const getCaptureDownloadUrl = (id: number) => `${API_BASE}/captures/${id}/download`;
+
+// Logs
+export const getLogs = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<EventLog>>(`/logs${qs}`);
+};
+export const clearLogs = (category?: string) => {
+  const qs = category ? `?category=${category}` : '';
+  return request<{ message: string }>(`/logs${qs}`, { method: 'DELETE' });
+};
+
+// Settings
+export const getSettings = () => request<SettingsData>('/settings');
+export const updateSettings = (data: Partial<SettingsData>) =>
+  request<SettingsData & { message: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) });
+
+// Types
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
+}
+
+export interface Client {
+  id: number;
+  mac_address: string;
+  ip_address: string | null;
+  hostname: string | null;
+  vlan_id: number | null;
+  auth_state: 'pending' | 'authenticated';
+  first_seen: string;
+  last_seen: string;
+  authenticated_at: string | null;
+}
+
+export interface MatchRule {
+  id?: number;
+  profile_id?: number;
+  src_ip?: string | null;
+  dst_ip?: string | null;
+  src_subnet?: string | null;
+  dst_subnet?: string | null;
+  mac_address?: string | null;
+  vlan_id?: number | null;
+  protocol?: string | null;
+  port?: number | null;
+}
+
+export interface ImpairmentProfile {
+  id: number;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  latency_ms: number;
+  jitter_ms: number;
+  packet_loss_percent: number;
+  bandwidth_limit_kbps: number;
+  match_rules: MatchRule[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ImpairmentProfileCreate {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  latency_ms?: number;
+  jitter_ms?: number;
+  packet_loss_percent?: number;
+  bandwidth_limit_kbps?: number;
+  match_rules?: Omit<MatchRule, 'id' | 'profile_id'>[];
+}
+
+export interface Capture {
+  id: number;
+  name: string;
+  state: 'running' | 'stopped' | 'error';
+  file_path: string;
+  file_size_bytes: number;
+  filter_ip: string | null;
+  filter_mac: string | null;
+  filter_vlan: number | null;
+  filter_expression: string | null;
+  pid: number | null;
+  started_at: string;
+  stopped_at: string | null;
+}
+
+export interface CaptureCreate {
+  name: string;
+  filter_ip?: string;
+  filter_mac?: string;
+  filter_vlan?: number;
+  filter_expression?: string;
+}
+
+export interface EventLog {
+  id: number;
+  category: string;
+  level: string;
+  message: string;
+  source_ip: string | null;
+  source_mac: string | null;
+  details: string | null;
+  created_at: string;
+}
+
+export interface OverviewData {
+  clients: { total: number; pending: number; authenticated: number };
+  profiles: { total: number; active: number };
+  captures: { active: number };
+  services: { dnsmasq: { running: boolean; status: string } };
+}
+
+export interface SettingsNetwork {
+  wan_interface: string;
+  lan_interface: string;
+  lan_ip: string;
+  lan_subnet: string;
+}
+
+export interface SettingsDHCP {
+  enabled: boolean;
+  range_start: string;
+  range_end: string;
+  lease_time: string;
+  gateway: string;
+  dns_server: string;
+}
+
+export interface SettingsVLAN {
+  id: number;
+  name: string;
+  interface: string;
+  ip: string;
+  subnet: string;
+  dhcp_range_start: string;
+  dhcp_range_end: string;
+}
+
+export interface SettingsDNS {
+  spoof_target: string;
+  upstream_servers: string[];
+}
+
+export interface SettingsPortal {
+  http_port: number;
+  https_port: number;
+  ssl_cert: string;
+  ssl_key: string;
+  ssl_cn: string;
+}
+
+export interface SettingsAdmin {
+  api_port: number;
+  frontend_port: number;
+}
+
+export interface SettingsCaptures {
+  output_dir: string;
+  max_file_size_mb: number;
+}
+
+export interface SettingsLogging {
+  level: string;
+  file: string;
+  max_size_mb: number;
+  backup_count: number;
+}
+
+export interface SettingsData {
+  network: SettingsNetwork;
+  dhcp: SettingsDHCP;
+  vlans: SettingsVLAN[];
+  dns: SettingsDNS;
+  portal: SettingsPortal;
+  admin: SettingsAdmin;
+  captures: SettingsCaptures;
+  logging: SettingsLogging;
+}

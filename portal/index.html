@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyConnect Wi-Fi</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #003366 0%, #001a33 40%, #0a0a2e 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .stars {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .stars::before, .stars::after {
+            content: '';
+            position: absolute;
+            width: 2px; height: 2px;
+            border-radius: 50%;
+            background: white;
+            box-shadow:
+                25px 50px white, 80px 120px white, 150px 30px white,
+                200px 180px white, 300px 60px white, 400px 140px white,
+                50px 250px white, 180px 300px white, 350px 220px white,
+                500px 80px white, 600px 200px white, 700px 50px white,
+                100px 400px white, 250px 350px white, 450px 300px white,
+                550px 150px white, 650px 280px white, 750px 100px white,
+                800px 250px white, 900px 180px white, 1000px 60px white;
+            animation: twinkle 4s infinite alternate;
+            opacity: 0.4;
+        }
+
+        .stars::after {
+            transform: translate(30px, 40px);
+            animation-delay: 2s;
+        }
+
+        @keyframes twinkle {
+            0% { opacity: 0.2; }
+            100% { opacity: 0.6; }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 480px;
+            width: 90%;
+            padding: 48px 40px;
+            background: rgba(255, 255, 255, 0.06);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            text-align: center;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+        }
+
+        .logo {
+            margin-bottom: 8px;
+        }
+
+        .logo svg {
+            width: 64px;
+            height: 64px;
+            fill: #4da6ff;
+        }
+
+        .airline-name {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: #7fbfff;
+            margin-bottom: 24px;
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #ffffff;
+        }
+
+        .subtitle {
+            font-size: 15px;
+            color: #a0c4e8;
+            margin-bottom: 32px;
+            line-height: 1.5;
+        }
+
+        .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 28px;
+            text-align: left;
+        }
+
+        .info-card h3 {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #7fbfff;
+            margin-bottom: 12px;
+        }
+
+        .info-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .info-card li {
+            font-size: 13px;
+            color: #c0d8ef;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .info-card li:last-child {
+            border-bottom: none;
+        }
+
+        .info-card li .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #4da6ff;
+            flex-shrink: 0;
+        }
+
+        .tos-text {
+            font-size: 12px;
+            color: #8aaccf;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+
+        .tos-text a {
+            color: #7fbfff;
+            text-decoration: underline;
+        }
+
+        .accept-btn {
+            width: 100%;
+            padding: 16px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+            background: linear-gradient(135deg, #0066cc, #0044aa);
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            letter-spacing: 0.5px;
+        }
+
+        .accept-btn:hover {
+            background: linear-gradient(135deg, #0077ee, #0055cc);
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(0, 102, 204, 0.4);
+        }
+
+        .accept-btn:active {
+            transform: translateY(0);
+        }
+
+        .accept-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .accept-btn.loading {
+            position: relative;
+            color: transparent;
+        }
+
+        .accept-btn.loading::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 22px; height: 22px;
+            margin: -11px 0 0 -11px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-msg {
+            margin-top: 16px;
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        .status-msg.error { color: #ff6b6b; }
+        .status-msg.success { color: #69db7c; }
+
+        .footer {
+            margin-top: 24px;
+            font-size: 11px;
+            color: #5a8ab5;
+        }
+    </style>
+</head>
+<body>
+    <div class="stars"></div>
+
+    <div class="container">
+        <div class="logo">
+            <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                <path d="M32 4 L58 28 L50 28 L50 56 L14 56 L14 28 L6 28 Z" opacity="0" />
+                <path d="M8 32 C8 32 14 20 32 12 C50 20 56 32 56 32 L52 34 C52 34 47 24 32 18 C17 24 12 34 12 34 Z" />
+                <path d="M4 38 L32 8 L60 38 L56 40 L32 14 L8 40 Z" />
+                <circle cx="32" cy="38" r="4" />
+                <path d="M24 42 C24 42 28 50 32 50 C36 50 40 42 40 42 L44 44 C44 44 38 56 32 56 C26 56 20 44 20 44 Z" />
+            </svg>
+        </div>
+
+        <div class="airline-name">SkyConnect Airlines</div>
+
+        <h1>Welcome Aboard</h1>
+        <p class="subtitle">Connect to our in-flight Wi-Fi to stay connected at 35,000 feet.</p>
+
+        <div class="info-card">
+            <h3>Connection Details</h3>
+            <ul>
+                <li><span class="dot"></span>Network: SkyConnect-WiFi</li>
+                <li><span class="dot"></span>Speed: Up to 15 Mbps</li>
+                <li><span class="dot"></span>Session: Complimentary</li>
+                <li><span class="dot"></span>Coverage: Gate-to-Gate</li>
+            </ul>
+        </div>
+
+        <p class="tos-text">
+            By clicking "Connect to Wi-Fi" below, you agree to the
+            <a href="#">Terms of Service</a> and <a href="#">Acceptable Use Policy</a>.
+            Bandwidth may be limited. VPN connections may experience reduced performance.
+        </p>
+
+        <button class="accept-btn" id="acceptBtn" onclick="acceptTOS()">
+            Connect to Wi-Fi
+        </button>
+
+        <div class="status-msg" id="statusMsg"></div>
+
+        <div class="footer">
+            &copy; 2025 SkyConnect Airlines &mdash; Powered by JetLag Network Simulator
+        </div>
+    </div>
+
+    <script>
+        async function acceptTOS() {
+            const btn = document.getElementById('acceptBtn');
+            const msg = document.getElementById('statusMsg');
+
+            btn.classList.add('loading');
+            btn.disabled = true;
+            msg.textContent = '';
+            msg.className = 'status-msg';
+
+            try {
+                const resp = await fetch('/api/portal/accept', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    msg.textContent = 'Connected! Redirecting...';
+                    msg.className = 'status-msg success';
+                    setTimeout(() => {
+                        window.location.href = data.redirect || 'https://www.google.com';
+                    }, 1500);
+                } else {
+                    msg.textContent = data.detail || 'Connection failed. Please try again.';
+                    msg.className = 'status-msg error';
+                    btn.classList.remove('loading');
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                msg.textContent = 'Network error. Please try again.';
+                msg.className = 'status-msg error';
+                btn.classList.remove('loading');
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
