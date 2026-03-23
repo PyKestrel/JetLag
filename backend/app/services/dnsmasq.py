@@ -42,10 +42,8 @@ class DnsmasqService:
             f"dhcp-option=option:router,{cfg.dhcp.gateway}",
             f"dhcp-option=option:dns-server,{cfg.dhcp.dns_server}",
             "",
-            "# DNS spoofing: resolve ALL domains to portal IP",
-            f"address=/#/{lan_ip}",
-            "",
-            "# Upstream DNS (used for authenticated clients via nftables bypass)",
+            "# Upstream DNS — forward all queries to real resolvers",
+            "# Captive portal redirect is handled by nftables, not DNS spoofing",
         ]
 
         for server in cfg.dns.upstream_servers:

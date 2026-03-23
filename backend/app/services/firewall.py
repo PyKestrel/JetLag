@@ -43,15 +43,17 @@ table inet jetlag {{
         # Skip interception for authenticated clients
         iifname "{lan}" ip saddr @authenticated_ips accept
 
-        # DNS interception: redirect all port 53 to local dnsmasq
+        # DNS interception: redirect all port-53 traffic to local dnsmasq
+        # (handles clients with hard-coded DNS like 8.8.8.8)
         iifname "{lan}" udp dport 53 dnat ip to {portal_ip}:53
         iifname "{lan}" tcp dport 53 dnat ip to {portal_ip}:53
 
-        # HTTP redirect to captive portal
-        iifname "{lan}" tcp dport 80 dnat ip to {portal_ip}:80
+        # Captive portal redirect: send unauthenticated HTTP to backend (port 8080)
+        # OS captive-portal detection uses HTTP, so this triggers the portal popup
+        iifname "{lan}" tcp dport 80 dnat ip to {portal_ip}:8080
 
-        # HTTPS redirect to captive portal (self-signed intercept)
-        iifname "{lan}" tcp dport 443 dnat ip to {portal_ip}:443
+        # HTTPS: also redirect to backend (will fail TLS but triggers fallback)
+        iifname "{lan}" tcp dport 443 dnat ip to {portal_ip}:8080
     }}
 
     chain postrouting {{

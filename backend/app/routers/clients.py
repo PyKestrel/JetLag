@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +9,8 @@ from app.models.client import Client, AuthState
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
 from app.services.firewall import FirewallService
 from app.services.logging_service import LoggingService
+from app.services.dnsmasq import DnsmasqService
+from app.services.network import NetworkService
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
@@ -92,6 +96,98 @@ async def deauthenticate_client(client_id: int, db: AsyncSession = Depends(get_d
     )
 
     return ClientResponse.model_validate(client)
+
+
+@router.post("/sync-leases")
+async def sync_leases(db: AsyncSession = Depends(get_db)):
+    """Sync clients from DHCP leases AND the ARP table.
+
+    This discovers both DHCP clients and static-IP clients visible on the LAN.
+    """
+    created = 0
+    updated = 0
+    seen_macs: set[str] = set()
+
+    # ── Phase 1: DHCP leases (authoritative source for hostname + MAC) ──
+    leases = await DnsmasqService.get_leases()
+    for lease in leases:
+        mac = lease.get("mac_address")
+        ip = lease.get("ip_address")
+        hostname = lease.get("hostname")
+        if not mac or not ip:
+            continue
+
+        mac = mac.lower()
+        seen_macs.add(mac)
+
+        result = await db.execute(select(Client).where(Client.mac_address == mac))
+        client = result.scalar_one_or_none()
+
+        if client:
+            client.ip_address = ip
+            if hostname:
+                client.hostname = hostname
+            client.last_seen = datetime.datetime.utcnow()
+            updated += 1
+        else:
+            client = Client(
+                mac_address=mac,
+                ip_address=ip,
+                hostname=hostname,
+                auth_state=AuthState.PENDING,
+                first_seen=datetime.datetime.utcnow(),
+                last_seen=datetime.datetime.utcnow(),
+            )
+            db.add(client)
+            created += 1
+
+    # ── Phase 2: ARP table (catches static-IP clients with no DHCP lease) ──
+    arp_entries = await NetworkService.get_lan_neighbours()
+    for entry in arp_entries:
+        mac = entry.get("mac")
+        ip = entry.get("ip")
+        if not mac or not ip or mac in seen_macs:
+            continue
+
+        seen_macs.add(mac)
+
+        # Check if this MAC already exists (maybe from a portal auto-create)
+        result = await db.execute(select(Client).where(Client.mac_address == mac))
+        client = result.scalar_one_or_none()
+
+        if not client:
+            # Also check by IP (may have a placeholder MAC from portal auto-create)
+            result = await db.execute(select(Client).where(Client.ip_address == ip))
+            client = result.scalar_one_or_none()
+            if client and client.mac_address.startswith("unknown-"):
+                client.mac_address = mac
+                client.last_seen = datetime.datetime.utcnow()
+                updated += 1
+                continue
+
+        if client:
+            client.ip_address = ip
+            client.last_seen = datetime.datetime.utcnow()
+            updated += 1
+        else:
+            client = Client(
+                mac_address=mac,
+                ip_address=ip,
+                hostname=None,
+                auth_state=AuthState.PENDING,
+                first_seen=datetime.datetime.utcnow(),
+                last_seen=datetime.datetime.utcnow(),
+            )
+            db.add(client)
+            created += 1
+
+    await db.flush()
+    return {
+        "message": f"Synced clients: {created} created, {updated} updated",
+        "created": created,
+        "updated": updated,
+        "sources": {"dhcp_leases": len(leases), "arp_entries": len(arp_entries)},
+    }
 
 
 @router.post("/bulk/reset")

@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 
 from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup
 from app.services.impairment import ImpairmentService
@@ -110,29 +110,47 @@ app.include_router(settings.router)
 
 
 @app.middleware("http")
-async def lan_restriction_middleware(request: Request, call_next):
+async def captive_portal_middleware(request: Request, call_next):
     """
-    After setup is completed, restrict admin API access to the LAN interface only.
-    The WAN interface should not be able to reach the admin UI or API.
-    Setup endpoints and health check are always accessible.
+    Captive portal interception + LAN restriction.
+
+    When nftables DNAT redirects an unauthenticated client's HTTP request to
+    port 8080, the Host header still contains the original destination (e.g.
+    "www.google.com").  We detect this and serve the captive portal page.
     """
     from app.config import settings as cfg
 
-    # Always allow setup endpoints and health check
     path = request.url.path
-    if path.startswith("/api/setup") or path == "/api/health":
+
+    # Always allow API, portal, health, setup, and static asset paths through
+    if (
+        path.startswith("/api/")
+        or path.startswith("/portal")
+        or path.startswith("/assets")
+        or path == "/favicon.ico"
+    ):
         return await call_next(request)
 
     # If setup is not completed, allow everything (initial config phase)
     if not cfg.setup_completed:
         return await call_next(request)
 
-    # After setup: check if request comes from LAN side
-    # On a real appliance, we compare the server's receiving interface.
-    # In practice, we check the client IP against the LAN subnet.
-    client_ip = request.client.host if request.client else None
+    # Detect DNAT'd requests: Host header won't match the appliance
+    host_header = (request.headers.get("host") or "").split(":")[0].lower()
     lan_ip = cfg.network.lan_ip
-    lan_subnet = cfg.network.lan_subnet
+    allowed_hosts = {"localhost", "127.0.0.1", "::1", lan_ip}
+
+    if host_header not in allowed_hosts:
+        # This request was DNAT'd from an unauthenticated client trying
+        # to reach the internet.  Serve the captive portal page.
+        portal_file = Path(__file__).parent.parent.parent / "portal" / "index.html"
+        if portal_file.exists():
+            return HTMLResponse(content=portal_file.read_text(), status_code=200)
+        # Fallback: redirect to portal path
+        return RedirectResponse(url=f"http://{lan_ip}:8080/portal")
+
+    # Request is addressed directly to the appliance — apply LAN restriction
+    client_ip = request.client.host if request.client else None
 
     # Allow requests from localhost (for proxied frontend)
     if client_ip in ("127.0.0.1", "::1", "localhost"):
@@ -145,6 +163,7 @@ async def lan_restriction_middleware(request: Request, call_next):
     # Check if client IP is within the LAN subnet
     try:
         import ipaddress
+        lan_subnet = cfg.network.lan_subnet
         network = ipaddress.IPv4Network(lan_subnet, strict=False)
         if ipaddress.IPv4Address(client_ip) in network:
             return await call_next(request)
