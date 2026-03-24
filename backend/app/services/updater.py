@@ -211,7 +211,13 @@ def get_history() -> list[dict]:
 
 async def check_for_update(force: bool = False) -> dict:
     """
-    Check GitHub Releases API for a newer version.
+    Check GitHub for a newer version.
+
+    Strategy:
+    1. Try the Releases API first (provides release notes, etc.).
+    2. If no releases exist (404 or empty), fall back to the Tags API
+       so that simply pushing a tag (e.g. ``git tag v0.3.1 && git push --tags``)
+       is enough to trigger an update.
     Results are cached; pass force=True to bypass cache.
     """
     from app.config import settings as cfg
@@ -228,46 +234,91 @@ async def check_for_update(force: bool = False) -> dict:
     _check_result.current_version = current
     _check_result.checked_at = _now_iso()
 
+    headers = {"Accept": "application/vnd.github+json"}
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            release = None
+
+            # ── 1. Try Releases API ──────────────────────────
             if channel == "stable":
                 url = f"https://api.github.com/repos/{repo}/releases/latest"
-                resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    release = resp.json()
             else:
-                # Beta channel: get all releases and pick the first (newest)
                 url = f"https://api.github.com/repos/{repo}/releases?per_page=5"
-                resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    releases = resp.json()
+                    if releases:
+                        release = releases[0]
 
-            if resp.status_code == 404:
-                logger.info(f"No releases found for {repo}")
+            # ── 2. Populate from Release if found ────────────
+            if release:
+                remote_tag = release.get("tag_name", "").lstrip("v")
+                _check_result.latest_version = remote_tag
+                _check_result.release_notes = release.get("body", "")
+                _check_result.published_at = release.get("published_at", "")
+                _check_result.html_url = release.get("html_url", "")
+                _check_result.prerelease = release.get("prerelease", False)
+                _check_result.download_url = release.get("tarball_url", "")
+                _check_result.available = _compare_versions(current, remote_tag)
+
+                logger.info(
+                    f"Update check (release): current={current}, latest={remote_tag}, "
+                    f"available={_check_result.available}"
+                )
+                return _check_result.to_dict()
+
+            # ── 3. Fallback: Tags API ────────────────────────
+            logger.info("No GitHub Releases found — falling back to Tags API")
+            url = f"https://api.github.com/repos/{repo}/tags?per_page=20"
+            resp = await client.get(url, headers=headers)
+
+            if resp.status_code != 200:
+                logger.warning(f"Tags API returned {resp.status_code}")
                 _check_result.available = False
                 return _check_result.to_dict()
 
-            resp.raise_for_status()
+            tags = resp.json()
+            if not tags:
+                logger.info("No tags found in repository")
+                _check_result.available = False
+                return _check_result.to_dict()
 
-            if channel == "stable":
-                release = resp.json()
-            else:
-                releases = resp.json()
-                if not releases:
-                    _check_result.available = False
-                    return _check_result.to_dict()
-                release = releases[0]
+            # Find the highest semver tag that starts with 'v'
+            best_version = None
+            best_tag_name = None
+            for tag in tags:
+                tag_name = tag.get("name", "")
+                if not tag_name.startswith("v"):
+                    continue
+                ver_str = tag_name.lstrip("v").split("-")[0]
+                try:
+                    ver_tuple = tuple(int(p) for p in ver_str.split("."))
+                except (ValueError, IndexError):
+                    continue
+                if best_version is None or ver_tuple > best_version:
+                    best_version = ver_tuple
+                    best_tag_name = tag_name
 
-            remote_tag = release.get("tag_name", "").lstrip("v")
+            if best_tag_name is None:
+                logger.info("No valid semver tags found")
+                _check_result.available = False
+                return _check_result.to_dict()
+
+            remote_tag = best_tag_name.lstrip("v")
             _check_result.latest_version = remote_tag
-            _check_result.release_notes = release.get("body", "")
-            _check_result.published_at = release.get("published_at", "")
-            _check_result.html_url = release.get("html_url", "")
-            _check_result.prerelease = release.get("prerelease", False)
-
-            # Find tarball URL
-            _check_result.download_url = release.get("tarball_url", "")
-
+            _check_result.release_notes = ""
+            _check_result.published_at = ""
+            _check_result.html_url = f"https://github.com/{repo}/releases/tag/{best_tag_name}"
+            _check_result.prerelease = False
+            _check_result.download_url = ""
             _check_result.available = _compare_versions(current, remote_tag)
 
             logger.info(
-                f"Update check: current={current}, latest={remote_tag}, "
+                f"Update check (tag): current={current}, latest={remote_tag}, "
                 f"available={_check_result.available}"
             )
 
