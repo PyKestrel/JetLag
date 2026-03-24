@@ -16,6 +16,9 @@ from app.config import (
     AdminConfig,
     CapturesConfig,
     LoggingConfig,
+    WANPort,
+    LANPort,
+    PortDHCPConfig,
     load_config,
 )
 
@@ -35,6 +38,8 @@ def _config_path() -> Path:
 async def get_settings():
     return {
         "setup_completed": settings.setup_completed,
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "vlans": [v.model_dump() for v in settings.vlans],
@@ -47,6 +52,8 @@ async def get_settings():
 
 
 class SettingsUpdate(BaseModel):
+    wan_ports: list[WANPort] | None = None
+    lan_ports: list[LANPort] | None = None
     network: NetworkConfig | None = None
     dhcp: DHCPConfig | None = None
     vlans: list[VLANConfig] | None = None
@@ -63,6 +70,10 @@ async def update_settings(payload: SettingsUpdate):
     global settings
 
     # Merge: only update sections that were provided
+    if payload.wan_ports is not None:
+        settings.wan_ports = payload.wan_ports
+    if payload.lan_ports is not None:
+        settings.lan_ports = payload.lan_ports
     if payload.network is not None:
         settings.network = payload.network
     if payload.dhcp is not None:
@@ -83,6 +94,8 @@ async def update_settings(payload: SettingsUpdate):
     # Serialize back to YAML
     config_data = {
         "setup_completed": settings.setup_completed,
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "vlans": [v.model_dump() for v in settings.vlans],

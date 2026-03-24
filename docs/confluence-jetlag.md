@@ -1,6 +1,6 @@
 # JetLag — Captive Portal Network Simulator
 
-> **Version:** 0.1.0 | **Platform:** Linux (Ubuntu 22.04+) | **License:** Internal — not for redistribution
+> **Version:** 0.2.0 | **Platform:** Linux (Ubuntu 22.04+)
 
 ---
 
@@ -8,7 +8,7 @@
 
 JetLag is a Linux-based virtual appliance that simulates hostile, restrictive captive-portal network environments — specifically airline Wi-Fi — for testing VPN clients, Zero Trust agents, and other connectivity software under real-world adverse conditions.
 
-It acts as an inline network gateway: clients connect to the appliance's LAN interface, are presented with a captive portal page, and once they accept the terms of service, they gain internet access through the appliance's WAN interface. Administrators can then apply network impairments (latency, packet loss, bandwidth limits, etc.) to shape and degrade traffic in a controlled, repeatable manner.
+It acts as an inline network gateway: clients connect to one or more of the appliance's LAN interfaces (including optional VLAN sub-interfaces), are presented with a captive portal page, and once they accept the terms of service, they gain internet access through the appliance's WAN interface(s). Administrators can then apply network impairments (latency, packet loss, bandwidth limits, etc.) to shape and degrade traffic in a controlled, repeatable manner. Multiple WAN and LAN ports can be dynamically added or removed at runtime, each LAN port running its own independent DHCP scope.
 
 ### Key Capabilities
 
@@ -21,34 +21,43 @@ It acts as an inline network gateway: clients connect to the appliance's LAN int
 | **Directional Control** | Impairments can be applied inbound, outbound, or both |
 | **Packet Capture** | On-demand tcpdump captures with filtering, downloadable as .pcap files |
 | **Event Logging** | Structured logs for DHCP, DNS, auth, firewall, impairment, capture, and system events |
-| **VLAN Support** | Optional VLAN-tagged sub-interfaces with independent DHCP scopes |
+| **Multi-Port Support** | Multiple WAN and LAN ports with dynamic add/remove, per-port DHCP, and VLAN tagging |
+| **VLAN Support** | Optional VLAN-tagged sub-interfaces with independent DHCP scopes per LAN port |
+| **Profile Management** | Simplified single-page editor for existing profiles, disable/enable toggle without deletion |
 | **Admin UI** | React-based single-page application for full appliance management |
-| **REST API** | Complete JSON API for automation and integration |
+| **REST API** | Complete JSON API for automation and integration (including port CRUD) |
 
 ---
 
 ## 2. Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        JetLag Appliance                          │
-│                                                                  │
-│  ┌──────────────┐   ┌──────────────┐   ┌────────────────────┐  │
-│  │  Admin UI     │   │   Captive    │   │  Network Services   │  │
-│  │  React SPA    │   │   Portal     │   │  dnsmasq            │  │
-│  │  :3000 (dev)  │   │  /portal     │   │  nftables           │  │
-│  └──────┬───────┘   └──────┬───────┘   │  tc/netem           │  │
-│         │                  │            │  tcpdump            │  │
-│  ┌──────┴──────────────────┴────────────┴────────────────────┐  │
-│  │                 FastAPI Backend (:8080)                     │  │
-│  │           SQLite DB  |  Service Layer  |  Middleware        │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌───────────┐                                ┌───────────┐     │
-│  │  eth0      │ ◄── WAN (upstream internet)   │  eth1      │    │
-│  │  (WAN)     │                               │  (LAN)     │    │
-│  └───────────┘                                └───────────┘     │
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                          JetLag Appliance                              │
+│                                                                        │
+│  ┌──────────────┐   ┌──────────────┐   ┌────────────────────┐        │
+│  │  Admin UI     │   │   Captive    │   │  Network Services   │        │
+│  │  React SPA    │   │   Portal     │   │  dnsmasq (per-port) │        │
+│  │  :3000 (dev)  │   │  /portal     │   │  nftables           │        │
+│  └──────┬───────┘   └──────┬───────┘   │  tc/netem           │        │
+│         │                  │            │  tcpdump            │        │
+│  ┌──────┴──────────────────┴────────────┴────────────────────┐        │
+│  │                 FastAPI Backend (:8080)                     │        │
+│  │     SQLite DB  |  Service Layer  |  Middleware  |  Port Mgr │        │
+│  └────────────────────────────────────────────────────────────┘        │
+│                                                                        │
+│  WAN Ports                               LAN Ports                     │
+│  ┌───────────┐                           ┌───────────┐                │
+│  │  eth0      │ ◄── WAN 1               │  eth1      │ ◄── LAN 1    │
+│  └───────────┘                           │  DHCP scope │               │
+│  ┌───────────┐                           └───────────┘                │
+│  │  eth2      │ ◄── WAN 2 (optional)    ┌───────────┐                │
+│  └───────────┘                           │  eth1.100  │ ◄── LAN 2    │
+│       ...                                │  VLAN 100  │    (VLAN)    │
+│                                          │  DHCP scope │               │
+│                                          └───────────┘                │
+│                                               ...                      │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Stack
@@ -58,7 +67,7 @@ It acts as an inline network gateway: clients connect to the appliance's LAN int
 | **Frontend** | React 18, TypeScript, Vite, TailwindCSS, Radix UI, Lucide icons | Admin dashboard SPA |
 | **Backend** | Python 3.11+, FastAPI, Uvicorn, SQLAlchemy (async), Pydantic v2 | REST API, service orchestration |
 | **Database** | SQLite via aiosqlite | Persistent storage for clients, profiles, captures, logs |
-| **DHCP/DNS** | dnsmasq | DHCP server for LAN clients, DNS forwarding to upstream resolvers |
+| **DHCP/DNS** | dnsmasq | Per-port DHCP server for LAN clients (one scope per LAN port/VLAN), DNS forwarding to upstream resolvers |
 | **Firewall** | nftables | NAT, captive portal redirect, client authentication enforcement |
 | **Traffic Shaping** | Linux tc/netem + HTB | Network impairment (latency, loss, bandwidth) |
 | **Packet Capture** | tcpdump | On-demand .pcap captures |
@@ -117,10 +126,10 @@ Client joins LAN
 
 | Chain | Hook | Purpose |
 |---|---|---|
-| `prerouting` | dstnat | Skips authenticated IPs; redirects DNS (port 53), HTTP (80→8080), HTTPS (443→8080) for unauthenticated clients |
-| `postrouting` | srcnat | Masquerades all traffic leaving the WAN interface |
-| `forward` | filter | Allows authenticated clients to reach WAN; drops unauthenticated forwarded traffic; allows established/related return traffic |
-| `input` | filter | Accepts all LAN traffic to the appliance, SSH on WAN, loopback, established/related |
+| `prerouting` | dstnat | Skips authenticated IPs; redirects DNS (port 53), HTTP (80→8080), HTTPS (443→8080) for unauthenticated clients on all LAN interfaces |
+| `postrouting` | srcnat | Masquerades all traffic leaving each WAN interface (one rule per WAN port) |
+| `forward` | filter | Allows authenticated clients from any LAN port to reach any WAN port; drops unauthenticated forwarded traffic; allows established/related return traffic |
+| `input` | filter | Accepts all LAN traffic (all LAN ports) to the appliance, SSH on WAN, loopback, established/related |
 
 ### Static IP Client Support
 
@@ -137,9 +146,11 @@ Clients using static IPs (no DHCP lease) are fully supported:
 
 ```
 jetlag/
+├── VERSION                      # Semantic version (single source of truth)
 ├── backend/                     # FastAPI backend
 │   ├── app/
 │   │   ├── main.py              # App entrypoint, lifespan, middleware
+│   │   ├── version.py           # Reads VERSION file, exposes __version__
 │   │   ├── config.py            # Pydantic config models, YAML loader
 │   │   ├── database.py          # SQLite async engine, session factory
 │   │   ├── models/              # SQLAlchemy ORM models
@@ -188,7 +199,9 @@ jetlag/
 │   └── jetlag.yaml              # Appliance configuration file
 └── scripts/
     ├── start-dev.sh             # Linux/macOS dev launcher
-    └── start-dev.ps1            # Windows dev launcher
+    ├── start-dev.ps1            # Windows dev launcher
+    ├── bump-version.sh          # SemVer bump (Linux/macOS)
+    └── bump-version.ps1         # SemVer bump (Windows)
 ```
 
 ---
@@ -203,7 +216,73 @@ All configuration is stored in `config/jetlag.yaml` and loaded at startup. Setti
 |---|---|---|---|
 | `setup_completed` | boolean | `false` | Set to `true` after the setup wizard completes. Controls whether services initialize on startup. |
 
-### 5.2 Network
+### 5.2 WAN Ports
+
+```yaml
+wan_ports:
+  - interface: eth0
+    enabled: true
+  - interface: eth2
+    enabled: true
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `interface` | string | — | Network interface name (e.g. `eth0`) |
+| `enabled` | boolean | `true` | Whether this WAN port is active |
+
+WAN ports can be dynamically added or removed at runtime via the Admin UI or the port management API. The firewall generates masquerade rules for each enabled WAN port.
+
+### 5.3 LAN Ports
+
+```yaml
+lan_ports:
+  - interface: eth1
+    ip: 10.0.1.1
+    subnet: 10.0.1.0/24
+    vlan_id: null
+    vlan_name: ""
+    enabled: true
+    dhcp:
+      enabled: true
+      range_start: 10.0.1.100
+      range_end: 10.0.1.250
+      lease_time: 1h
+      gateway: 10.0.1.1
+      dns_server: 10.0.1.1
+  - interface: eth1
+    ip: 10.0.10.1
+    subnet: 10.0.10.0/24
+    vlan_id: 100
+    vlan_name: "Guest WiFi"
+    enabled: true
+    dhcp:
+      enabled: true
+      range_start: 10.0.10.100
+      range_end: 10.0.10.250
+      lease_time: 1h
+      gateway: 10.0.10.1
+      dns_server: 10.0.10.1
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `interface` | string | — | Base interface name (e.g. `eth1`) |
+| `ip` | string | — | IP address for this LAN port |
+| `subnet` | string | — | Subnet in CIDR notation |
+| `vlan_id` | integer / null | `null` | VLAN tag ID. When set, a sub-interface `<interface>.<vlan_id>` is created |
+| `vlan_name` | string | `""` | Human-readable VLAN label |
+| `enabled` | boolean | `true` | Whether this LAN port is active |
+| `dhcp.enabled` | boolean | `true` | Run a DHCP scope on this port |
+| `dhcp.range_start` | string | auto | First IP in DHCP pool |
+| `dhcp.range_end` | string | auto | Last IP in DHCP pool |
+| `dhcp.lease_time` | string | `1h` | Lease duration |
+| `dhcp.gateway` | string | same as `ip` | Gateway advertised to clients |
+| `dhcp.dns_server` | string | same as `ip` | DNS server advertised to clients |
+
+Each LAN port gets its own dnsmasq DHCP scope. VLAN sub-interfaces are automatically created on Linux when `vlan_id` is set (e.g. `eth1.100`). The captive portal middleware checks all LAN IPs and subnets for access control.
+
+### 5.4 Network (Legacy)
 
 ```yaml
 network:
@@ -215,12 +294,14 @@ network:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `wan_interface` | string | `eth0` | Upstream internet-facing interface |
-| `lan_interface` | string | `eth1` | Client-facing interface (DHCP, portal, impairments) |
-| `lan_ip` | string | `10.0.1.1` | IP address assigned to the LAN interface |
-| `lan_subnet` | string | `10.0.1.0/24` | LAN subnet in CIDR notation |
+| `wan_interface` | string | `eth0` | Primary upstream interface (legacy — prefer `wan_ports`) |
+| `lan_interface` | string | `eth1` | Primary client-facing interface (legacy — prefer `lan_ports`) |
+| `lan_ip` | string | `10.0.1.1` | Primary LAN IP (legacy — prefer `lan_ports`) |
+| `lan_subnet` | string | `10.0.1.0/24` | Primary LAN subnet (legacy — prefer `lan_ports`) |
 
-### 5.3 DHCP
+> **Note:** The `network` section is maintained for backward compatibility. When `wan_ports` and `lan_ports` are present, they take precedence. The setup wizard populates both.
+
+### 5.5 DHCP
 
 ```yaml
 dhcp:
@@ -241,7 +322,7 @@ dhcp:
 | `gateway` | string | `10.0.1.1` | Default gateway advertised to clients |
 | `dns_server` | string | `10.0.1.1` | DNS server advertised to clients (should be the appliance LAN IP) |
 
-### 5.4 DNS
+### 5.6 DNS
 
 ```yaml
 dns:
@@ -258,7 +339,7 @@ dns:
 
 > **Note:** Captive portal redirect is handled by nftables HTTP DNAT, not by DNS spoofing.
 
-### 5.5 VLANs
+### 5.7 VLANs (Legacy)
 
 ```yaml
 vlans: []
@@ -281,7 +362,9 @@ vlans: []
 | `dhcp_range_start` | string | First IP in VLAN DHCP pool |
 | `dhcp_range_end` | string | Last IP in VLAN DHCP pool |
 
-### 5.6 Portal
+> **Note:** The `vlans` list is a legacy configuration format. VLAN support is now integrated into the `lan_ports` list (section 5.3) where each LAN port can optionally specify a `vlan_id`. The setup wizard and port management API use `lan_ports` exclusively.
+
+### 5.8 Portal
 
 ```yaml
 portal:
@@ -302,7 +385,7 @@ portal:
 
 > **Note:** In the current architecture, nftables redirects ports 80/443 to the FastAPI backend on port 8080. The `http_port`/`https_port` settings are reserved for a future standalone portal server.
 
-### 5.7 Admin
+### 5.9 Admin
 
 ```yaml
 admin:
@@ -315,7 +398,7 @@ admin:
 | `api_port` | integer | `8080` | FastAPI backend port |
 | `frontend_port` | integer | `3000` | Vite dev server port (development only) |
 
-### 5.8 Captures
+### 5.10 Captures
 
 ```yaml
 captures:
@@ -328,7 +411,7 @@ captures:
 | `output_dir` | string | `/var/lib/jetlag/captures` | Directory for .pcap output files |
 | `max_file_size_mb` | integer | `100` | Maximum size per capture file (tcpdump `-C` flag) |
 
-### 5.9 Logging
+### 5.11 Logging
 
 ```yaml
 logging:
@@ -452,10 +535,15 @@ All responses are JSON. Paginated endpoints return:
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/setup/status` | Check if initial setup has been completed |
+| `GET` | `/api/setup/status` | Check if initial setup has been completed. Includes `wan_ports` and `lan_ports` arrays. |
 | `GET` | `/api/setup/interfaces` | List detected network interfaces with state, MAC, IPv4 addresses |
 | `POST` | `/api/setup/complete` | Finalize setup: configure LAN IP, start dnsmasq, nftables, tc/netem, enable IP forwarding |
 | `POST` | `/api/setup/reset` | Reset setup status (dev/testing) |
+| `GET` | `/api/setup/ports` | List all configured WAN and LAN ports |
+| `POST` | `/api/setup/ports/wan` | Add a WAN port (reloads firewall) |
+| `DELETE` | `/api/setup/ports/wan/{interface}` | Remove a WAN port |
+| `POST` | `/api/setup/ports/lan` | Add a LAN port with optional VLAN and DHCP config (reloads dnsmasq + firewall) |
+| `DELETE` | `/api/setup/ports/lan/{interface}` | Remove a LAN port (use `eth1.100` format for VLAN sub-interfaces) |
 
 **POST /api/setup/complete** request body:
 ```json
@@ -469,6 +557,38 @@ All responses are JSON. Paginated endpoints return:
   "dhcp_range_end": "10.0.1.250",
   "dhcp_lease_time": "1h",
   "dns_upstream": ["1.1.1.1", "8.8.8.8"]
+}
+```
+
+**POST /api/setup/ports/wan** request body:
+```json
+{
+  "interface": "eth2",
+  "enabled": true
+}
+```
+
+**POST /api/setup/ports/lan** request body:
+```json
+{
+  "interface": "eth1",
+  "ip": "10.0.10.1",
+  "subnet": "10.0.10.0/24",
+  "vlan_id": 100,
+  "vlan_name": "Guest WiFi",
+  "enabled": true,
+  "dhcp_enabled": true,
+  "dhcp_range_start": "10.0.10.100",
+  "dhcp_range_end": "10.0.10.250",
+  "dhcp_lease_time": "1h"
+}
+```
+
+Port endpoints return the updated port list in the response:
+```json
+{
+  "message": "LAN port eth1.100 added",
+  "lan_ports": [{ "interface": "eth1", "ip": "10.0.1.1", "subnet": "10.0.1.0/24", ... }, ...]
 }
 ```
 
@@ -562,11 +682,12 @@ All responses are JSON. Paginated endpoints return:
 | `GET` | `/api/settings` | Get all appliance settings |
 | `PUT` | `/api/settings` | Update settings (partial update, only send sections to change) |
 
-### 7.9 Health
+### 7.9 Health & Version
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{"status": "ok", "service": "jetlag"}` |
+| `GET` | `/api/health` | Returns `{"status": "ok", "service": "jetlag", "version": "0.2.0"}` |
+| `GET` | `/api/version` | Returns structured version info: `{"version": "0.2.0", "major": 0, "minor": 2, "patch": 0, "prerelease": null}` |
 
 ---
 
@@ -579,12 +700,12 @@ The admin dashboard is a React SPA accessible at `http://<appliance-ip>:3000` (d
 | **Setup Wizard** | `/setup` | First-run wizard: select WAN/LAN interfaces, configure DHCP, DNS upstream servers |
 | **Overview** | `/` | Dashboard showing client count (pending/authenticated), active profiles, running captures, dnsmasq status |
 | **Clients** | `/clients` | Table of all discovered clients with MAC, IP, hostname, VLAN, auth state. Actions: authenticate, deauthenticate, bulk reset, sync leases |
-| **Profiles** | `/profiles` | Impairment profile management with a 5-step creation wizard |
+| **Profiles** | `/profiles` | Impairment profile management: 5-step wizard for new profiles, simplified single-page flat editor for existing profiles, disable/enable toggle |
 | **Captures** | `/captures` | Start/stop tcpdump captures with filters, download .pcap files |
 | **Logs** | `/logs` | Searchable event log viewer with category and level filters |
-| **Settings** | `/settings` | Edit all YAML configuration sections, persist changes |
+| **Settings** | `/settings` | Multi-port management (WAN/LAN add/remove with VLAN and per-port DHCP), plus all YAML configuration sections |
 
-### Profile Creation Wizard (5 Steps)
+### Profile Creation Wizard (5 Steps — New Profiles)
 
 | Step | Name | Fields |
 |---|---|---|
@@ -593,6 +714,31 @@ The admin dashboard is a React SPA accessible at `http://<appliance-ip>:3000` (d
 | 3 | **Impairment parameters** | Latency (ms), jitter (ms), packet loss (%), corruption (%), reordering (%), duplication (%), bandwidth limit (kbps) |
 | 4 | **Traffic match rules** | Match type selector (Single IP / Subnet / MAC Address) with conditional fields, plus protocol, port, VLAN. Multiple rules supported. |
 | 5 | **Review & deploy** | Summary table, enable-immediately toggle, save/create button |
+
+### Profile Flat Editor (Existing Profiles)
+
+When editing an existing profile, a simplified single-page editor opens instead of the multi-step wizard. All settings are visible at once in collapsible card sections:
+
+| Section | Fields |
+|---|---|
+| **Profile information** | Name, direction, description, enabled toggle |
+| **Latency / Jitter** | Delay (ms), jitter (ms), correlation (%), distribution |
+| **Loss, Corruption, Reorder & Duplication** | All percentage and correlation fields in a compact 4-column grid |
+| **Rate control** | Bandwidth limit (kbps), ceil (kbps), burst (KB) |
+| **Traffic match rules** | Add/remove rules with match type (IP/Subnet/MAC), protocol, port, VLAN ID |
+
+The flat editor includes a sticky header bar and bottom save bar with **Save changes** and **Cancel** buttons. The **Enabled** toggle in the profile information section allows disabling a profile without deleting it — disabled profiles remain in the database but their tc/netem rules are not applied.
+
+### Settings Page — Port Management
+
+The Settings page now includes two new sections at the top:
+
+| Section | Description |
+|---|---|
+| **WAN Ports** | Lists all configured WAN ports with enabled/disabled status badges. Add new WAN ports by selecting from detected interfaces. Remove ports with confirmation. |
+| **LAN Ports** | Lists all LAN ports showing IP, subnet, VLAN tag, DHCP range, and lease time. Add new LAN ports with IP, subnet, optional VLAN ID/name, and DHCP range. Remove ports with confirmation. |
+
+Port changes take effect immediately — the backend reloads dnsmasq and nftables after each add/remove operation. The legacy Network and DHCP sections remain below for backward-compatible single-interface configuration.
 
 ---
 
@@ -648,7 +794,7 @@ Wildcard values (`0.0.0.0`, `0.0.0.0/0`) are skipped. If no match criteria remai
 
 | Method | Description |
 |---|---|
-| `initialize()` | Load full nftables ruleset (flush + recreate). Called on setup completion and startup. |
+| `initialize()` | Load full nftables ruleset (flush + recreate) with rules for all WAN/LAN port combinations. Called on setup completion, startup, and after port add/remove. |
 | `allow_client(ip, mac)` | Add IP to `authenticated_ips` set (24h timeout) |
 | `intercept_client(ip, mac)` | Remove IP from `authenticated_ips` set |
 | `reset_all()` | Flush the entire `authenticated_ips` set |
@@ -667,7 +813,7 @@ Wildcard values (`0.0.0.0`, `0.0.0.0/0`) are skipped. If no match criteria remai
 
 | Method | Description |
 |---|---|
-| `generate_config()` | Write `/etc/dnsmasq.d/jetlag.conf` from current settings |
+| `generate_config()` | Write `/etc/dnsmasq.d/jetlag.conf` with per-port DHCP scopes (one `dhcp-range` per enabled LAN port, VLAN-aware interface binding) |
 | `restart()` | `systemctl restart dnsmasq` |
 | `reload()` | `systemctl reload dnsmasq` (falls back to restart) |
 | `get_leases()` | Parse dnsmasq lease file, return list of `{mac, ip, hostname}` |
@@ -716,7 +862,7 @@ Wildcard values (`0.0.0.0`, `0.0.0.0/0`) are skipped. If no match criteria remai
 | **nftables** | 0.9+ | Firewall (replaces iptables) |
 | **iproute2** | 5.0+ | tc/netem for traffic shaping |
 | **tcpdump** | 4.9+ | Packet capture |
-| **Hardware** | 2 NICs | One for WAN, one for LAN |
+| **Hardware** | 2+ NICs | Minimum one for WAN and one for LAN; additional NICs supported for multi-port configurations |
 
 ### Quick Start (Development)
 
@@ -758,11 +904,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 5. Click **Complete Setup**
 
 Setup will automatically:
-- Assign the configured IP to the LAN interface
-- Generate and start dnsmasq
-- Load the nftables ruleset
+- Assign the configured IP to the LAN interface (and create VLAN sub-interfaces if needed)
+- Generate and start dnsmasq with per-port DHCP scopes
+- Load the nftables ruleset with rules for all configured WAN/LAN port combinations
 - Initialize tc/netem root qdiscs
 - Enable IP forwarding (`net.ipv4.ip_forward=1`)
+
+After initial setup, additional WAN and LAN ports can be added at any time via the **Settings** page or the port management API (`/api/setup/ports/*`). Each new LAN port can optionally specify a VLAN tag and its own DHCP scope.
 
 ### Environment Variables
 
@@ -773,7 +921,64 @@ Setup will automatically:
 
 ---
 
-## 12. Troubleshooting
+## 12. Versioning
+
+JetLag uses [Semantic Versioning](https://semver.org/) (SemVer). The single source of truth is the `VERSION` file at the project root.
+
+### Version Format
+
+```
+MAJOR.MINOR.PATCH[-PRERELEASE]
+```
+
+| Segment | When to increment |
+|---|---|
+| **MAJOR** | Breaking API or config changes |
+| **MINOR** | New features, backward-compatible |
+| **PATCH** | Bug fixes, backward-compatible |
+| **PRERELEASE** | Optional suffix (e.g. `1.0.0-beta.1`) |
+
+### Where the Version Lives
+
+| Location | Description |
+|---|---|
+| `VERSION` | **Source of truth** — plain text file at project root |
+| `backend/app/version.py` | Python module that reads `VERSION`; exposes `__version__` and `get_version_info()` |
+| `frontend/package.json` | `"version"` field (synced by bump script) |
+| `docs/confluence-jetlag.md` | Header and footer version references (synced by bump script) |
+| FastAPI `app.version` | Set from `__version__` at startup |
+| `GET /api/version` | Returns `{"version", "major", "minor", "patch", "prerelease"}` |
+| `GET /api/health` | Includes `"version"` in response |
+| Admin UI footer | Fetches version from `/api/version` on load |
+
+### Bumping the Version
+
+**Linux / macOS:**
+```bash
+./scripts/bump-version.sh patch    # 0.2.0 → 0.2.1
+./scripts/bump-version.sh minor    # 0.2.0 → 0.3.0
+./scripts/bump-version.sh major    # 0.2.0 → 1.0.0
+./scripts/bump-version.sh set 1.0.0-rc.1  # explicit version
+```
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\bump-version.ps1 patch
+.\scripts\bump-version.ps1 minor
+.\scripts\bump-version.ps1 major
+.\scripts\bump-version.ps1 set 1.0.0-rc.1
+```
+
+The bump scripts update `VERSION`, `frontend/package.json`, and `docs/confluence-jetlag.md` in one step. After bumping:
+```bash
+git add VERSION frontend/package.json docs/confluence-jetlag.md
+git commit -m "chore: bump version to <new-version>"
+git tag v<new-version>
+```
+
+---
+
+## 13. Troubleshooting
 
 ### Client can't get an IP address
 - Verify dnsmasq is running: `systemctl status dnsmasq`
@@ -808,7 +1013,7 @@ Setup will automatically:
 
 ---
 
-## 13. Security Considerations
+## 14. Security Considerations
 
 | Area | Implementation |
 |---|---|
@@ -821,7 +1026,7 @@ Setup will automatically:
 
 ---
 
-## 14. Example Impairment Profiles
+## 15. Example Impairment Profiles
 
 ### Airline Wi-Fi (Economy)
 ```json
@@ -866,4 +1071,4 @@ Setup will automatically:
 
 ---
 
-*Document generated from codebase analysis — JetLag v0.1.0*
+*Document generated from codebase analysis — JetLag v0.2.0*

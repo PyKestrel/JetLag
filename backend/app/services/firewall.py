@@ -22,10 +22,63 @@ class FirewallService:
 
     @staticmethod
     async def initialize():
-        """Set up base nftables ruleset: NAT, DNS interception, HTTP/HTTPS redirect."""
-        lan = settings.network.lan_interface
-        wan = settings.network.wan_interface
-        portal_ip = settings.network.lan_ip
+        """Set up base nftables ruleset: NAT, DNS interception, HTTP/HTTPS redirect.
+
+        Supports multiple WAN and LAN ports (including VLAN sub-interfaces).
+        """
+        cfg = settings
+        lan_ports = cfg.lan_ports
+        wan_ports = cfg.wan_ports
+        lan_ifaces = cfg.all_lan_interfaces()
+        wan_ifaces = cfg.all_wan_interfaces()
+
+        if not lan_ifaces or not wan_ifaces:
+            logger.warning("No LAN or WAN ports configured — skipping nftables init")
+            return
+
+        # Build interface name sets for nftables
+        lan_set = ", ".join(f'"{i}"' for i in lan_ifaces)   # "eth1", "eth1.100"
+        wan_set = ", ".join(f'"{i}"' for i in wan_ifaces)   # "eth0"
+
+        # Build per-LAN-port prerouting rules
+        prerouting_rules = []
+        for lp in lan_ports:
+            if not lp.enabled:
+                continue
+            iif = lp.effective_interface
+            portal_ip = lp.ip
+            prerouting_rules.append(f'        iifname "{iif}" ip saddr @authenticated_ips accept')
+            prerouting_rules.append(f'        iifname "{iif}" udp dport 53 dnat ip to {portal_ip}:53')
+            prerouting_rules.append(f'        iifname "{iif}" tcp dport 53 dnat ip to {portal_ip}:53')
+            prerouting_rules.append(f'        iifname "{iif}" tcp dport 80 dnat ip to {portal_ip}:8080')
+            prerouting_rules.append(f'        iifname "{iif}" tcp dport 443 dnat ip to {portal_ip}:8080')
+        prerouting_block = "\n".join(prerouting_rules)
+
+        # Build per-WAN masquerade rules
+        postrouting_rules = []
+        for wi in wan_ifaces:
+            postrouting_rules.append(f'        oifname "{wi}" masquerade')
+        postrouting_block = "\n".join(postrouting_rules)
+
+        # Build forward rules for all LAN↔WAN combinations
+        forward_rules = ["        ct state established,related accept"]
+        for li in lan_ifaces:
+            for wi in wan_ifaces:
+                forward_rules.append(f'        iifname "{li}" ip saddr @authenticated_ips oifname "{wi}" accept')
+                forward_rules.append(f'        iifname "{wi}" oifname "{li}" ct state established,related accept')
+                forward_rules.append(f'        iifname "{li}" oifname "{wi}" drop')
+        forward_block = "\n".join(forward_rules)
+
+        # Build input rules
+        input_rules = [
+            "        ct state established,related accept",
+            '        iifname "lo" accept',
+        ]
+        for li in lan_ifaces:
+            input_rules.append(f'        iifname "{li}" accept')
+        for wi in wan_ifaces:
+            input_rules.append(f'        iifname "{wi}" tcp dport {{ 22 }} accept')
+        input_block = "\n".join(input_rules)
 
         ruleset = f"""
 flush ruleset
@@ -39,54 +92,22 @@ table inet jetlag {{
 
     chain prerouting {{
         type nat hook prerouting priority dstnat; policy accept;
-
-        # Skip interception for authenticated clients
-        iifname "{lan}" ip saddr @authenticated_ips accept
-
-        # DNS interception: redirect all port-53 traffic to local dnsmasq
-        # (handles clients with hard-coded DNS like 8.8.8.8)
-        iifname "{lan}" udp dport 53 dnat ip to {portal_ip}:53
-        iifname "{lan}" tcp dport 53 dnat ip to {portal_ip}:53
-
-        # Captive portal redirect: send unauthenticated HTTP to backend (port 8080)
-        # OS captive-portal detection uses HTTP, so this triggers the portal popup
-        iifname "{lan}" tcp dport 80 dnat ip to {portal_ip}:8080
-
-        # HTTPS: also redirect to backend (will fail TLS but triggers fallback)
-        iifname "{lan}" tcp dport 443 dnat ip to {portal_ip}:8080
+{prerouting_block}
     }}
 
     chain postrouting {{
         type nat hook postrouting priority srcnat; policy accept;
-
-        # Masquerade authenticated traffic going out WAN
-        oifname "{wan}" masquerade
+{postrouting_block}
     }}
 
     chain forward {{
         type filter hook forward priority filter; policy drop;
-
-        # Allow established/related
-        ct state established,related accept
-
-        # Allow authenticated clients to reach WAN
-        iifname "{lan}" ip saddr @authenticated_ips oifname "{wan}" accept
-
-        # Allow return traffic
-        iifname "{wan}" oifname "{lan}" ct state established,related accept
-
-        # Drop everything else from unauthenticated clients
-        iifname "{lan}" oifname "{wan}" drop
+{forward_block}
     }}
 
     chain input {{
         type filter hook input priority filter; policy accept;
-
-        # Allow all traffic to the appliance itself (DHCP, DNS, portal, admin)
-        ct state established,related accept
-        iifname "lo" accept
-        iifname "{lan}" accept
-        iifname "{wan}" tcp dport {{ 22 }} accept
+{input_block}
     }}
 }}
 """
@@ -96,7 +117,7 @@ table inet jetlag {{
         if rc != 0:
             logger.error(f"Failed to initialize nftables: {result_err}")
             raise RuntimeError(f"nftables init failed: {result_err}")
-        logger.info("nftables base ruleset initialized")
+        logger.info(f"nftables initialized: LAN={lan_ifaces}, WAN={wan_ifaces}")
 
     @staticmethod
     async def allow_client(ip: str, mac: Optional[str] = None):

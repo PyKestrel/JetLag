@@ -26,45 +26,56 @@ class DnsmasqService:
 
     @staticmethod
     async def generate_config():
-        """Generate the dnsmasq configuration file for captive portal mode."""
+        """Generate the dnsmasq configuration file.
+
+        Iterates over all configured LAN ports (including VLAN sub-interfaces)
+        and creates per-port interface bindings and DHCP scopes.
+        """
         cfg = settings
-        lan = cfg.network.lan_interface
-        lan_ip = cfg.network.lan_ip
+        lan_ports = cfg.lan_ports
 
         lines = [
             "# JetLag dnsmasq configuration — auto-generated",
-            f"interface={lan}",
-            f"listen-address={lan_ip}",
             "bind-interfaces",
-            "",
-            "# DHCP",
-            f"dhcp-range={cfg.dhcp.range_start},{cfg.dhcp.range_end},{cfg.dhcp.lease_time}",
-            f"dhcp-option=option:router,{cfg.dhcp.gateway}",
-            f"dhcp-option=option:dns-server,{cfg.dhcp.dns_server}",
-            "",
-            "# Upstream DNS — forward all queries to real resolvers",
-            "# Captive portal redirect is handled by nftables, not DNS spoofing",
         ]
 
+        # Listen addresses — one per LAN port
+        listen_addrs = set()
+        for lp in lan_ports:
+            if not lp.enabled:
+                continue
+            iif = lp.effective_interface
+            tag = f"lan_{iif.replace('.', '_')}"
+
+            lines.append("")
+            label = f"VLAN {lp.vlan_id} ({lp.vlan_name})" if lp.vlan_id is not None else iif
+            lines.append(f"# LAN port: {label}")
+            lines.append(f"interface={iif}")
+            listen_addrs.add(lp.ip)
+
+            if lp.dhcp.enabled:
+                lines.append(
+                    f"dhcp-range=set:{tag},{lp.dhcp.range_start},{lp.dhcp.range_end},{lp.dhcp.lease_time}"
+                )
+                lines.append(f"dhcp-option=tag:{tag},option:router,{lp.dhcp.gateway}")
+                lines.append(f"dhcp-option=tag:{tag},option:dns-server,{lp.dhcp.dns_server}")
+
+        # Listen addresses
+        for addr in sorted(listen_addrs):
+            lines.append(f"listen-address={addr}")
+
+        # Upstream DNS
+        lines.append("")
+        lines.append("# Upstream DNS — forward all queries to real resolvers")
+        lines.append("# Captive portal redirect is handled by nftables, not DNS spoofing")
         for server in cfg.dns.upstream_servers:
             lines.append(f"server={server}")
-
-        # VLAN-specific DHCP ranges
-        for vlan in cfg.vlans:
-            lines.append("")
-            lines.append(f"# VLAN {vlan.id}: {vlan.name}")
-            lines.append(f"interface={vlan.interface}")
-            lines.append(
-                f"dhcp-range=set:vlan{vlan.id},{vlan.dhcp_range_start},{vlan.dhcp_range_end},{cfg.dhcp.lease_time}"
-            )
-            lines.append(f"dhcp-option=tag:vlan{vlan.id},option:router,{vlan.ip}")
-            lines.append(f"dhcp-option=tag:vlan{vlan.id},option:dns-server,{vlan.ip}")
 
         lines.append("")
         lines.append("# Logging")
         lines.append("log-queries")
         lines.append("log-dhcp")
-        lines.append(f"log-facility=/var/log/jetlag/dnsmasq.log")
+        lines.append("log-facility=/var/log/jetlag/dnsmasq.log")
 
         config_content = "\n".join(lines) + "\n"
 
@@ -75,7 +86,7 @@ class DnsmasqService:
         conf_path.parent.mkdir(parents=True, exist_ok=True)
         conf_path.write_text(config_content)
 
-        logger.info(f"dnsmasq config written to {DNSMASQ_CONF_PATH}")
+        logger.info(f"dnsmasq config written to {DNSMASQ_CONF_PATH} ({len(lan_ports)} LAN ports)")
         return config_content
 
     @staticmethod

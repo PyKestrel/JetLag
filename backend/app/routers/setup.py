@@ -9,7 +9,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import settings, NetworkConfig, DHCPConfig, DNSConfig
+from app.config import settings, NetworkConfig, DHCPConfig, DNSConfig, WANPort, LANPort, PortDHCPConfig
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
 from app.services.impairment import ImpairmentService
@@ -117,6 +117,8 @@ async def get_setup_status():
         "wan_interface": settings.network.wan_interface if settings.setup_completed else None,
         "lan_interface": settings.network.lan_interface if settings.setup_completed else None,
         "lan_ip": settings.network.lan_ip if settings.setup_completed else None,
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
     }
 
 
@@ -139,14 +141,64 @@ class SetupRequest(BaseModel):
     dns_upstream: list[str] = ["1.1.1.1", "8.8.8.8"]
 
 
+def _persist_config():
+    """Serialize the current in-memory settings to jetlag.yaml."""
+    config_data = {
+        "setup_completed": settings.setup_completed,
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
+        "network": settings.network.model_dump(),
+        "dhcp": settings.dhcp.model_dump(),
+        "vlans": [v.model_dump() for v in settings.vlans],
+        "dns": settings.dns.model_dump(),
+        "portal": settings.portal.model_dump(),
+        "admin": settings.admin.model_dump(),
+        "captures": settings.captures.model_dump(),
+        "logging": settings.logging.model_dump(),
+    }
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+
+def _configure_lan_port(lp: LANPort):
+    """Configure a single LAN port (or VLAN sub-interface) on Linux."""
+    import ipaddress as _ip
+    iif = lp.effective_interface
+    net = _ip.IPv4Network(lp.subnet, strict=False)
+    prefix_len = net.prefixlen
+
+    # Create VLAN sub-interface if needed
+    if lp.vlan_id is not None:
+        subprocess.run(
+            ["ip", "link", "add", "link", lp.interface, "name", iif,
+             "type", "vlan", "id", str(lp.vlan_id)],
+            capture_output=True, timeout=5,
+        )
+
+    subprocess.run(
+        ["ip", "addr", "flush", "dev", iif],
+        capture_output=True, timeout=5,
+    )
+    subprocess.run(
+        ["ip", "addr", "add", f"{lp.ip}/{prefix_len}", "dev", iif],
+        capture_output=True, timeout=5,
+    )
+    subprocess.run(
+        ["ip", "link", "set", iif, "up"],
+        capture_output=True, timeout=5,
+    )
+    logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
+
+
 @router.post("/complete")
 async def complete_setup(payload: SetupRequest):
     """
     Finalize initial setup:
     1. Save WAN/LAN interface selections and network config to jetlag.yaml
     2. Mark setup as completed
-    3. On a real appliance, this would start DHCP/DNS/firewall on the LAN interface
-       and restrict admin access to LAN only
+    3. On a real appliance, start DHCP/DNS/firewall on all LAN interfaces
     """
     if payload.wan_interface == payload.lan_interface:
         raise HTTPException(
@@ -154,7 +206,23 @@ async def complete_setup(payload: SetupRequest):
             detail="WAN and LAN interfaces must be different.",
         )
 
-    # Update in-memory config
+    # Build port lists from the initial setup payload
+    settings.wan_ports = [WANPort(interface=payload.wan_interface)]
+    settings.lan_ports = [LANPort(
+        interface=payload.lan_interface,
+        ip=payload.lan_ip,
+        subnet=payload.lan_subnet,
+        dhcp=PortDHCPConfig(
+            enabled=payload.dhcp_enabled,
+            range_start=payload.dhcp_range_start,
+            range_end=payload.dhcp_range_end,
+            lease_time=payload.dhcp_lease_time,
+            gateway=payload.lan_ip,
+            dns_server=payload.lan_ip,
+        ),
+    )]
+
+    # Update legacy fields
     settings.network = NetworkConfig(
         wan_interface=payload.wan_interface,
         lan_interface=payload.lan_interface,
@@ -172,23 +240,8 @@ async def complete_setup(payload: SetupRequest):
     settings.setup_completed = True
 
     # Persist to YAML
-    config_data = {
-        "setup_completed": True,
-        "network": settings.network.model_dump(),
-        "dhcp": settings.dhcp.model_dump(),
-        "vlans": [v.model_dump() for v in settings.vlans],
-        "dns": settings.dns.model_dump(),
-        "portal": settings.portal.model_dump(),
-        "admin": settings.admin.model_dump(),
-        "captures": settings.captures.model_dump(),
-        "logging": settings.logging.model_dump(),
-    }
-
-    path = _config_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+        _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -202,28 +255,14 @@ async def complete_setup(payload: SetupRequest):
     services_failed = []
 
     if platform.system() == "Linux":
-        # 1. Configure the LAN interface IP
-        try:
-            import ipaddress
-            net = ipaddress.IPv4Network(payload.lan_subnet, strict=False)
-            prefix_len = net.prefixlen
-            subprocess.run(
-                ["ip", "addr", "flush", "dev", payload.lan_interface],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                ["ip", "addr", "add", f"{payload.lan_ip}/{prefix_len}", "dev", payload.lan_interface],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                ["ip", "link", "set", payload.lan_interface, "up"],
-                capture_output=True, timeout=5,
-            )
-            services_started.append("lan_interface")
-            logger.info(f"LAN interface {payload.lan_interface} configured with {payload.lan_ip}/{prefix_len}")
-        except Exception as e:
-            logger.error(f"Failed to configure LAN interface: {e}")
-            services_failed.append(f"lan_interface: {e}")
+        # 1. Configure all LAN interfaces
+        for lp in settings.lan_ports:
+            try:
+                _configure_lan_port(lp)
+                services_started.append(f"lan:{lp.effective_interface}")
+            except Exception as e:
+                logger.error(f"Failed to configure LAN port {lp.effective_interface}: {e}")
+                services_failed.append(f"lan:{lp.effective_interface}: {e}")
 
         # 2. Generate dnsmasq config and start the service
         try:
@@ -265,11 +304,176 @@ async def complete_setup(payload: SetupRequest):
     return {
         "message": "Setup completed successfully",
         "setup_completed": True,
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
         "network": settings.network.model_dump(),
         "dhcp": settings.dhcp.model_dump(),
         "dns": settings.dns.model_dump(),
         "services_started": services_started,
         "services_failed": services_failed,
+    }
+
+
+# ── Port management endpoints ─────────────────────────────────────
+
+
+class AddWANPortRequest(BaseModel):
+    interface: str
+    enabled: bool = True
+
+
+class AddLANPortRequest(BaseModel):
+    interface: str
+    ip: str
+    subnet: str
+    vlan_id: int | None = None
+    vlan_name: str = ""
+    enabled: bool = True
+    dhcp_enabled: bool = True
+    dhcp_range_start: str = ""
+    dhcp_range_end: str = ""
+    dhcp_lease_time: str = "1h"
+
+
+@router.post("/ports/wan")
+async def add_wan_port(payload: AddWANPortRequest):
+    """Add a new WAN port to the appliance configuration."""
+    # Prevent duplicates
+    for p in settings.wan_ports:
+        if p.interface == payload.interface:
+            raise HTTPException(status_code=400, detail=f"WAN port {payload.interface} already exists")
+
+    port = WANPort(interface=payload.interface, enabled=payload.enabled)
+    settings.wan_ports.append(port)
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    # Reload firewall to include new WAN port
+    if settings.setup_completed and platform.system() == "Linux":
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after adding WAN port: {e}")
+
+    logger.info(f"WAN port added: {payload.interface}")
+    return {"message": f"WAN port {payload.interface} added", "wan_ports": [p.model_dump() for p in settings.wan_ports]}
+
+
+@router.delete("/ports/wan/{interface}")
+async def remove_wan_port(interface: str):
+    """Remove a WAN port from the configuration."""
+    original_len = len(settings.wan_ports)
+    settings.wan_ports = [p for p in settings.wan_ports if p.interface != interface]
+    if len(settings.wan_ports) == original_len:
+        raise HTTPException(status_code=404, detail=f"WAN port {interface} not found")
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    if settings.setup_completed and platform.system() == "Linux":
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after removing WAN port: {e}")
+
+    logger.info(f"WAN port removed: {interface}")
+    return {"message": f"WAN port {interface} removed", "wan_ports": [p.model_dump() for p in settings.wan_ports]}
+
+
+@router.post("/ports/lan")
+async def add_lan_port(payload: AddLANPortRequest):
+    """Add a new LAN port (optionally with a VLAN tag) to the configuration."""
+    effective = f"{payload.interface}.{payload.vlan_id}" if payload.vlan_id else payload.interface
+    for p in settings.lan_ports:
+        if p.effective_interface == effective:
+            raise HTTPException(status_code=400, detail=f"LAN port {effective} already exists")
+
+    dhcp = PortDHCPConfig(
+        enabled=payload.dhcp_enabled,
+        range_start=payload.dhcp_range_start or payload.ip.rsplit(".", 1)[0] + ".100",
+        range_end=payload.dhcp_range_end or payload.ip.rsplit(".", 1)[0] + ".250",
+        lease_time=payload.dhcp_lease_time,
+        gateway=payload.ip,
+        dns_server=payload.ip,
+    )
+
+    port = LANPort(
+        interface=payload.interface,
+        ip=payload.ip,
+        subnet=payload.subnet,
+        vlan_id=payload.vlan_id,
+        vlan_name=payload.vlan_name,
+        enabled=payload.enabled,
+        dhcp=dhcp,
+    )
+    settings.lan_ports.append(port)
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    # Configure the new interface and reload services
+    if settings.setup_completed and platform.system() == "Linux":
+        try:
+            _configure_lan_port(port)
+        except Exception as e:
+            logger.error(f"Failed to configure new LAN port {effective}: {e}")
+
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+        except Exception as e:
+            logger.error(f"Failed to reload dnsmasq after adding LAN port: {e}")
+
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after adding LAN port: {e}")
+
+    logger.info(f"LAN port added: {effective} (ip={payload.ip}, vlan={payload.vlan_id})")
+    return {"message": f"LAN port {effective} added", "lan_ports": [p.model_dump() for p in settings.lan_ports]}
+
+
+@router.delete("/ports/lan/{interface}")
+async def remove_lan_port(interface: str):
+    """Remove a LAN port from the configuration. Use 'eth1.100' format for VLAN sub-interfaces."""
+    original_len = len(settings.lan_ports)
+    settings.lan_ports = [p for p in settings.lan_ports if p.effective_interface != interface]
+    if len(settings.lan_ports) == original_len:
+        raise HTTPException(status_code=404, detail=f"LAN port {interface} not found")
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    if settings.setup_completed and platform.system() == "Linux":
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+        except Exception as e:
+            logger.error(f"Failed to reload dnsmasq after removing LAN port: {e}")
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after removing LAN port: {e}")
+
+    logger.info(f"LAN port removed: {interface}")
+    return {"message": f"LAN port {interface} removed", "lan_ports": [p.model_dump() for p in settings.lan_ports]}
+
+
+@router.get("/ports")
+async def list_ports():
+    """Return current WAN and LAN port configuration."""
+    return {
+        "wan_ports": [p.model_dump() for p in settings.wan_ports],
+        "lan_ports": [p.model_dump() for p in settings.lan_ports],
     }
 
 

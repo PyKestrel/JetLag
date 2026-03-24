@@ -14,6 +14,7 @@ from app.routers import clients, profiles, captures, logs, portal, overview, set
 from app.services.impairment import ImpairmentService
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
+from app.version import __version__, get_version_info
 
 
 def setup_logging():
@@ -83,7 +84,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="JetLag",
     description="Captive Portal Network Simulator — Admin API",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -135,10 +136,11 @@ async def captive_portal_middleware(request: Request, call_next):
     if not cfg.setup_completed:
         return await call_next(request)
 
-    # Detect DNAT'd requests: Host header won't match the appliance
+    # Detect DNAT'd requests: Host header won't match any appliance IP
     host_header = (request.headers.get("host") or "").split(":")[0].lower()
-    lan_ip = cfg.network.lan_ip
-    allowed_hosts = {"localhost", "127.0.0.1", "::1", lan_ip}
+    all_lan_ips = set(cfg.all_lan_ips())
+    allowed_hosts = {"localhost", "127.0.0.1", "::1"} | all_lan_ips
+    primary_lan_ip = cfg.network.lan_ip  # fallback for redirects
 
     if host_header not in allowed_hosts:
         # This request was DNAT'd from an unauthenticated client trying
@@ -147,7 +149,7 @@ async def captive_portal_middleware(request: Request, call_next):
         if portal_file.exists():
             return HTMLResponse(content=portal_file.read_text(), status_code=200)
         # Fallback: redirect to portal path
-        return RedirectResponse(url=f"http://{lan_ip}:8080/portal")
+        return RedirectResponse(url=f"http://{primary_lan_ip}:8080/portal")
 
     # Request is addressed directly to the appliance — apply LAN restriction
     client_ip = request.client.host if request.client else None
@@ -156,22 +158,25 @@ async def captive_portal_middleware(request: Request, call_next):
     if client_ip in ("127.0.0.1", "::1", "localhost"):
         return await call_next(request)
 
-    # Allow requests from the appliance's own LAN IP
-    if client_ip == lan_ip:
+    # Allow requests from any of the appliance's own LAN IPs
+    if client_ip in all_lan_ips:
         return await call_next(request)
 
-    # Check if client IP is within the LAN subnet
+    # Check if client IP is within any configured LAN subnet
     try:
         import ipaddress
-        lan_subnet = cfg.network.lan_subnet
-        network = ipaddress.IPv4Network(lan_subnet, strict=False)
-        if ipaddress.IPv4Address(client_ip) in network:
-            return await call_next(request)
+        client_addr = ipaddress.IPv4Address(client_ip)
+        for lp in cfg.lan_ports:
+            if not lp.enabled:
+                continue
+            network = ipaddress.IPv4Network(lp.subnet, strict=False)
+            if client_addr in network:
+                return await call_next(request)
     except (ValueError, TypeError):
         # If we can't parse, allow the request (fail-open for dev)
         return await call_next(request)
 
-    # Block: client is not on LAN
+    # Block: client is not on any LAN
     return JSONResponse(
         status_code=403,
         content={
@@ -192,4 +197,9 @@ if frontend_dist.exists():
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "jetlag"}
+    return {"status": "ok", "service": "jetlag", "version": __version__}
+
+
+@app.get("/api/version")
+async def version_info():
+    return get_version_info()

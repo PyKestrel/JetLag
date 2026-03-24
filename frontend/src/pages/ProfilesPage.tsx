@@ -105,6 +105,7 @@ export default function ProfilesPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [editMode, setEditMode] = useState<'wizard' | 'flat'>('wizard')
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<ImpairmentProfileCreate>({ ...emptyForm })
   const [saving, setSaving] = useState(false)
@@ -118,6 +119,7 @@ export default function ProfilesPage() {
 
   const openCreate = () => {
     setEditingId(null)
+    setEditMode('wizard')
     setForm({ ...emptyForm })
     setRuleTypes([])
     setShowForm(true)
@@ -125,6 +127,7 @@ export default function ProfilesPage() {
 
   const openEdit = (p: ImpairmentProfile) => {
     setEditingId(p.id)
+    setEditMode('flat')
     setForm({
       name: p.name,
       description: p.description || '',
@@ -153,20 +156,16 @@ export default function ProfilesPage() {
     setShowForm(true)
   }
 
-  const handleSave = async () => {
-    setSaving(true)
-    // Normalize match rules: fill in defaults so tc filters always have valid targets
-    const normalizedRules = (form.match_rules || []).map((rule, idx) => {
+  const normalizeRules = () => {
+    return (form.match_rules || []).map((rule, idx) => {
       const mt = ruleTypes[idx] || 'ip'
       const r = { ...rule }
       if (mt === 'ip') {
-        // For single IP: if both are empty, use 0.0.0.0 (match any)
         if (!r.src_ip && !r.dst_ip && !r.protocol && !r.port && !r.vlan_id) {
           r.src_ip = '0.0.0.0'
         }
         r.src_subnet = null; r.dst_subnet = null; r.mac_address = null
       } else if (mt === 'subnet') {
-        // For subnet: default empty src to 0.0.0.0/0, empty dst to 0.0.0.0/0
         if (!r.src_subnet) r.src_subnet = '0.0.0.0/0'
         if (!r.dst_subnet) r.dst_subnet = '0.0.0.0/0'
         r.src_ip = null; r.dst_ip = null; r.mac_address = null
@@ -175,7 +174,11 @@ export default function ProfilesPage() {
       }
       return r
     })
-    const payload = { ...form, match_rules: normalizedRules }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    const payload = { ...form, match_rules: normalizeRules() }
     try {
       if (editingId) {
         await updateProfile(editingId, payload)
@@ -183,12 +186,14 @@ export default function ProfilesPage() {
         await createProfile(payload)
       }
       await refetch()
-      // Don't close form here — the wizard will show the success screen
-      // and the user can close manually or we auto-close after a delay
-      setTimeout(() => setShowForm(false), 2000)
+      if (editMode === 'flat') {
+        setShowForm(false)
+      } else {
+        setTimeout(() => setShowForm(false), 2000)
+      }
     } catch (err) {
       setSaving(false)
-      throw err // re-throw so the wizard can display the error inline
+      throw err
     }
     setSaving(false)
   }
@@ -353,9 +358,21 @@ export default function ProfilesPage() {
         </>
       )}
 
-      {/* ── Multi-step wizard overlay ── */}
-      {showForm && (
+      {/* ── Form overlay: wizard for create, flat editor for edit ── */}
+      {showForm && editMode === 'wizard' && (
         <ProfileWizard
+          editingId={editingId}
+          form={form}
+          setForm={setForm}
+          saving={saving}
+          onSave={handleSave}
+          onClose={() => setShowForm(false)}
+          ruleTypes={ruleTypes}
+          setRuleTypes={setRuleTypes}
+        />
+      )}
+      {showForm && editMode === 'flat' && editingId && (
+        <ProfileFlatEditor
           editingId={editingId}
           form={form}
           setForm={setForm}
@@ -1006,6 +1023,343 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose, rule
             </div>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   Profile Flat Editor — Single-page edit view for existing profiles
+   ══════════════════════════════════════════════════════════════════ */
+
+function ProfileFlatEditor({ editingId, form, setForm, saving, onSave, onClose, ruleTypes, setRuleTypes }: {
+  editingId: number
+  form: ImpairmentProfileCreate
+  setForm: (f: ImpairmentProfileCreate) => void
+  saving: boolean
+  onSave: () => Promise<void>
+  onClose: () => void
+  ruleTypes: RuleMatchType[]
+  setRuleTypes: React.Dispatch<React.SetStateAction<RuleMatchType[]>>
+}) {
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const handleSubmit = async () => {
+    setSaveError(null)
+    try {
+      await onSave()
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed')
+    }
+  }
+
+  const updateRule = (idx: number, patch: Record<string, unknown>) => {
+    const rules = [...(form.match_rules || [])]
+    rules[idx] = { ...rules[idx], ...patch }
+    setForm({ ...form, match_rules: rules })
+  }
+
+  const removeRule = (idx: number) => {
+    const rules = [...(form.match_rules || [])]
+    rules.splice(idx, 1)
+    setForm({ ...form, match_rules: rules })
+    setRuleTypes((prev: RuleMatchType[]) => { const n = [...prev]; n.splice(idx, 1); return n })
+  }
+
+  const setRuleType = (idx: number, type: RuleMatchType) => {
+    setRuleTypes((prev: RuleMatchType[]) => { const n = [...prev]; n[idx] = type; return n })
+    const cleared: Record<string, unknown> = {}
+    if (type === 'ip') {
+      cleared.src_subnet = null; cleared.dst_subnet = null; cleared.mac_address = null
+    } else if (type === 'subnet') {
+      cleared.src_ip = null; cleared.dst_ip = null; cleared.mac_address = null
+    } else if (type === 'mac') {
+      cleared.src_ip = null; cleared.dst_ip = null; cleared.src_subnet = null; cleared.dst_subnet = null
+    }
+    updateRule(idx, cleared)
+  }
+
+  const addRule = () => {
+    setForm({ ...form, match_rules: [...(form.match_rules || []), { ...emptyRule }] })
+    setRuleTypes((prev: RuleMatchType[]) => [...prev, 'ip'])
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background overflow-y-auto">
+      {/* Top header bar */}
+      <header className="sticky top-0 z-10 h-[52px] border-b border-border bg-card flex items-center justify-between px-6">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[14px] font-semibold text-foreground">Edit Profile</span>
+          <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium">#{editingId}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={onClose} className="text-[13px] text-muted-foreground hover:text-foreground transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !form.name.trim()}
+            className="inline-flex items-center gap-1.5 px-4 py-[6px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Save changes
+          </button>
+        </div>
+      </header>
+
+      <div className="max-w-[860px] mx-auto px-6 py-8">
+        <div className="mb-6">
+          <h1 className="text-[22px] font-semibold text-foreground">Edit impairment profile</h1>
+          <p className="text-[14px] text-muted-foreground mt-1">
+            All settings are shown on a single page. Make your changes and save.
+          </p>
+        </div>
+
+        {saveError && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 mb-6">
+            <div className="flex gap-2">
+              <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+              <p className="text-[12px] text-red-800">{saveError}</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Section: Profile info ── */}
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="bg-muted/40 px-5 py-3 border-b border-border">
+            <h3 className="text-[13px] font-semibold text-foreground">Profile information</h3>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className={labelCls}>Profile name</label>
+                <input type="text" value={form.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, name: e.target.value })} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Direction</label>
+                <select value={form.direction} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setForm({ ...form, direction: e.target.value as 'outbound' | 'inbound' | 'both' })} className={inputCls}>
+                  <option value="outbound">Outbound</option>
+                  <option value="inbound">Inbound</option>
+                  <option value="both">Both</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Description <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <textarea value={form.description || ''} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setForm({ ...form, description: e.target.value })} rows={2} className={inputCls} />
+            </div>
+            <div className="flex items-center justify-between pt-2">
+              <div>
+                <span className="text-[13px] font-medium text-foreground">Enabled</span>
+                <p className="text-[11px] text-muted-foreground">Apply tc/netem rules immediately</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, enabled: !form.enabled })}
+                className={`relative w-9 h-5 rounded-full transition-colors ${form.enabled ? 'bg-primary' : 'bg-gray-300'}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section: Latency / Jitter ── */}
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="bg-muted/40 px-5 py-3 border-b border-border">
+            <h3 className="text-[13px] font-semibold text-foreground">Latency / Jitter</h3>
+          </div>
+          <div className="p-5 grid grid-cols-4 gap-4">
+            <div>
+              <label className={labelCls}>Delay (ms)</label>
+              <input type="number" min={0} value={form.latency_ms} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, latency_ms: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Jitter (ms)</label>
+              <input type="number" min={0} value={form.jitter_ms} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, jitter_ms: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Correlation (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.latency_correlation} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, latency_correlation: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Distribution</label>
+              <select value={form.latency_distribution} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setForm({ ...form, latency_distribution: e.target.value })} className={inputCls}>
+                <option value="">None</option>
+                <option value="normal">Normal</option>
+                <option value="pareto">Pareto</option>
+                <option value="paretonormal">Pareto-Normal</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section: Packet Loss / Corruption / Reorder / Duplicate (compact) ── */}
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="bg-muted/40 px-5 py-3 border-b border-border">
+            <h3 className="text-[13px] font-semibold text-foreground">Loss, Corruption, Reorder & Duplication</h3>
+          </div>
+          <div className="p-5 grid grid-cols-4 gap-4">
+            <div>
+              <label className={labelCls}>Loss (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.packet_loss_percent} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, packet_loss_percent: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Loss corr. (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.loss_correlation} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, loss_correlation: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Corruption (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.corruption_percent} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, corruption_percent: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Corrupt corr. (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.corruption_correlation} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, corruption_correlation: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Reorder (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.reorder_percent} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, reorder_percent: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Reorder corr. (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.reorder_correlation} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, reorder_correlation: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Duplicate (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.duplicate_percent} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, duplicate_percent: Number(e.target.value) })} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Dup. corr. (%)</label>
+              <input type="number" min={0} max={100} step={0.1} value={form.duplicate_correlation} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, duplicate_correlation: Number(e.target.value) })} className={inputCls} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section: Rate control ── */}
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="bg-muted/40 px-5 py-3 border-b border-border">
+            <h3 className="text-[13px] font-semibold text-foreground">Rate control</h3>
+          </div>
+          <div className="p-5 grid grid-cols-3 gap-4">
+            <div>
+              <label className={labelCls}>Rate limit (kbps)</label>
+              <input type="number" min={0} value={form.bandwidth_limit_kbps} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, bandwidth_limit_kbps: Number(e.target.value) })} className={inputCls} placeholder="0 = unlimited" />
+            </div>
+            <div>
+              <label className={labelCls}>Ceil (kbps)</label>
+              <input type="number" min={0} value={form.bandwidth_ceil_kbps} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, bandwidth_ceil_kbps: Number(e.target.value) })} className={inputCls} placeholder="0 = same as rate" />
+            </div>
+            <div>
+              <label className={labelCls}>Burst (KB)</label>
+              <input type="number" min={0} value={form.bandwidth_burst_kbytes} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, bandwidth_burst_kbytes: Number(e.target.value) })} className={inputCls} placeholder="0 = auto" />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section: Traffic match rules ── */}
+        <div className="rounded-lg border border-border overflow-hidden mb-6">
+          <div className="bg-muted/40 px-5 py-3 border-b border-border flex items-center justify-between">
+            <h3 className="text-[13px] font-semibold text-foreground">Traffic match rules ({(form.match_rules || []).length})</h3>
+            <button type="button" onClick={addRule} className="inline-flex items-center gap-1 px-2.5 py-1 text-[12px] font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+              <Plus className="h-3 w-3" /> Add rule
+            </button>
+          </div>
+          <div className="p-5">
+            {(form.match_rules || []).length === 0 && (
+              <p className="text-[13px] text-muted-foreground text-center py-4">No match rules — profile applies to all traffic.</p>
+            )}
+            <div className="space-y-4">
+              {(form.match_rules || []).map((rule, idx) => {
+                const matchType = ruleTypes[idx] || 'ip'
+                return (
+                  <div key={idx} className="rounded border border-border p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[12px] font-semibold text-foreground">Rule {idx + 1}</span>
+                      <button type="button" onClick={() => removeRule(idx)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-4 gap-3">
+                      <div>
+                        <label className={labelCls}>Match type</label>
+                        <select value={matchType} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setRuleType(idx, e.target.value as RuleMatchType)} className={inputCls}>
+                          <option value="ip">Single IP</option>
+                          <option value="subnet">Subnet</option>
+                          <option value="mac">MAC</option>
+                        </select>
+                      </div>
+                      {matchType === 'ip' && (
+                        <>
+                          <div>
+                            <label className={labelCls}>Source IP</label>
+                            <input type="text" value={rule.src_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_ip: e.target.value || null })} placeholder="10.0.1.50" className={inputCls} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Destination IP</label>
+                            <input type="text" value={rule.dst_ip || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_ip: e.target.value || null })} placeholder="8.8.8.8" className={inputCls} />
+                          </div>
+                        </>
+                      )}
+                      {matchType === 'subnet' && (
+                        <>
+                          <div>
+                            <label className={labelCls}>Source Subnet</label>
+                            <input type="text" value={rule.src_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { src_subnet: e.target.value || null })} placeholder="10.0.1.0/24" className={inputCls} />
+                          </div>
+                          <div>
+                            <label className={labelCls}>Dest Subnet</label>
+                            <input type="text" value={rule.dst_subnet || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { dst_subnet: e.target.value || null })} placeholder="0.0.0.0/0" className={inputCls} />
+                          </div>
+                        </>
+                      )}
+                      {matchType === 'mac' && (
+                        <div>
+                          <label className={labelCls}>MAC Address</label>
+                          <input type="text" value={rule.mac_address || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { mac_address: e.target.value || null })} placeholder="aa:bb:cc:dd:ee:ff" className={inputCls} />
+                        </div>
+                      )}
+                      <div>
+                        <label className={labelCls}>Protocol</label>
+                        <select value={rule.protocol || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateRule(idx, { protocol: e.target.value || null })} className={inputCls}>
+                          <option value="">Any</option>
+                          <option value="tcp">TCP</option>
+                          <option value="udp">UDP</option>
+                          <option value="icmp">ICMP</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-3 mt-3">
+                      <div>
+                        <label className={labelCls}>Port</label>
+                        <input type="number" min={0} max={65535} value={rule.port ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { port: e.target.value ? Number(e.target.value) : null })} placeholder="443" className={inputCls} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>VLAN ID</label>
+                        <input type="number" min={0} max={4094} value={rule.vlan_id ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateRule(idx, { vlan_id: e.target.value ? Number(e.target.value) : null })} placeholder="100" className={inputCls} />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom save bar */}
+        <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
+          <button onClick={onClose} className="px-4 py-2 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !form.name.trim()}
+            className="inline-flex items-center gap-1.5 px-5 py-2 text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Save changes
+          </button>
+        </div>
       </div>
     </div>
   )

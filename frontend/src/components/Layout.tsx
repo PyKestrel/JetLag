@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -19,6 +19,7 @@ import {
   Bug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getVersion } from '@/lib/api'
 
 interface NavSection {
   label: string
@@ -154,6 +155,13 @@ function SidebarSection({ section }: { section: NavSection }) {
 export default function Layout() {
   const location = useLocation()
   const crumbs = breadcrumbMap[location.pathname] || ['Overview']
+  const [appVersion, setAppVersion] = useState<string>('')
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => setAppVersion(v.version))
+      .catch(() => setAppVersion('unknown'))
+  }, [])
 
   return (
     <div className="flex h-screen bg-background">
@@ -242,7 +250,7 @@ export default function Layout() {
         {/* Footer */}
         <footer className="flex-shrink-0 border-t border-[hsl(var(--header-border))] bg-card px-6 py-2.5">
           <div className="flex items-center justify-center gap-4 text-[11px] text-muted-foreground">
-            <span>JetLag v0.1</span>
+            <span>JetLag v{appVersion || '…'}</span>
             <span className="opacity-30">|</span>
             <a href="/settings" className="hover:text-foreground transition-colors">Settings</a>
             <span className="opacity-30">|</span>

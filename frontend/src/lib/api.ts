@@ -77,6 +77,27 @@ export const completeSetup = (data: SetupRequest) =>
 export const resetSetup = () =>
   request<{ message: string; setup_completed: boolean }>('/setup/reset', { method: 'POST' });
 
+// Version
+export interface VersionInfo {
+  version: string;
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string | null;
+}
+export const getVersion = () => request<VersionInfo>('/version');
+
+// Port management
+export const listPorts = () => request<{ wan_ports: WANPort[]; lan_ports: LANPort[] }>('/setup/ports');
+export const addWANPort = (data: { interface: string; enabled?: boolean }) =>
+  request<{ message: string; wan_ports: WANPort[] }>('/setup/ports/wan', { method: 'POST', body: JSON.stringify(data) });
+export const removeWANPort = (iface: string) =>
+  request<{ message: string; wan_ports: WANPort[] }>(`/setup/ports/wan/${iface}`, { method: 'DELETE' });
+export const addLANPort = (data: AddLANPortRequest) =>
+  request<{ message: string; lan_ports: LANPort[] }>('/setup/ports/lan', { method: 'POST', body: JSON.stringify(data) });
+export const removeLANPort = (iface: string) =>
+  request<{ message: string; lan_ports: LANPort[] }>(`/setup/ports/lan/${iface}`, { method: 'DELETE' });
+
 // Types
 export interface PaginatedResponse<T> {
   items: T[];
@@ -200,6 +221,43 @@ export interface EventLog {
   created_at: string;
 }
 
+export interface PortDHCPConfig {
+  enabled: boolean;
+  range_start: string;
+  range_end: string;
+  lease_time: string;
+  gateway: string;
+  dns_server: string;
+}
+
+export interface WANPort {
+  interface: string;
+  enabled: boolean;
+}
+
+export interface LANPort {
+  interface: string;
+  ip: string;
+  subnet: string;
+  vlan_id: number | null;
+  vlan_name: string;
+  enabled: boolean;
+  dhcp: PortDHCPConfig;
+}
+
+export interface AddLANPortRequest {
+  interface: string;
+  ip: string;
+  subnet: string;
+  vlan_id?: number | null;
+  vlan_name?: string;
+  enabled?: boolean;
+  dhcp_enabled?: boolean;
+  dhcp_range_start?: string;
+  dhcp_range_end?: string;
+  dhcp_lease_time?: string;
+}
+
 export interface OverviewData {
   clients: { total: number; pending: number; authenticated: number };
   profiles: { total: number; active: number };
@@ -300,6 +358,8 @@ export interface SetupCompleteResponse {
 }
 
 export interface SettingsData {
+  wan_ports: WANPort[];
+  lan_ports: LANPort[];
   network: SettingsNetwork;
   dhcp: SettingsDHCP;
   vlans: SettingsVLAN[];

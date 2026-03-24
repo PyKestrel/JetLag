@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react'
-import { Save, RotateCcw, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Save, RotateCcw, CheckCircle2, AlertTriangle, Plus, Trash2, Network, Wifi } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import {
   getSettings,
   updateSettings,
+  listPorts,
+  addWANPort,
+  removeWANPort,
+  addLANPort,
+  removeLANPort,
+  getSetupInterfaces,
   type SettingsData,
   type SettingsNetwork,
   type SettingsDHCP,
@@ -12,6 +18,9 @@ import {
   type SettingsAdmin,
   type SettingsCaptures,
   type SettingsLogging,
+  type WANPort,
+  type LANPort,
+  type NetworkInterface,
 } from '@/lib/api'
 
 function Field({
@@ -97,12 +106,97 @@ export default function SettingsPage() {
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [dirty, setDirty] = useState(false)
 
+  // Port management state
+  const [wanPorts, setWanPorts] = useState<WANPort[]>([])
+  const [lanPorts, setLanPorts] = useState<LANPort[]>([])
+  const [availableIfaces, setAvailableIfaces] = useState<NetworkInterface[]>([])
+  const [showAddWan, setShowAddWan] = useState(false)
+  const [showAddLan, setShowAddLan] = useState(false)
+  const [newWanIface, setNewWanIface] = useState('')
+  const [newLan, setNewLan] = useState({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
+  const [portMsg, setPortMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
   useEffect(() => {
     if (data) {
       setForm(structuredClone(data))
       setDirty(false)
+      setWanPorts(data.wan_ports || [])
+      setLanPorts(data.lan_ports || [])
     }
   }, [data])
+
+  useEffect(() => {
+    getSetupInterfaces().then((res) => setAvailableIfaces(res.interfaces || [])).catch(() => {})
+  }, [])
+
+  const refreshPorts = async () => {
+    try {
+      const res = await listPorts()
+      setWanPorts(res.wan_ports)
+      setLanPorts(res.lan_ports)
+    } catch { /* ignore */ }
+  }
+
+  const handleAddWan = async () => {
+    if (!newWanIface) return
+    setPortMsg(null)
+    try {
+      const res = await addWANPort({ interface: newWanIface })
+      setWanPorts(res.wan_ports)
+      setNewWanIface('')
+      setShowAddWan(false)
+      setPortMsg({ type: 'success', text: `WAN port ${newWanIface} added` })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to add WAN port' })
+    }
+  }
+
+  const handleRemoveWan = async (iface: string) => {
+    if (!confirm(`Remove WAN port ${iface}?`)) return
+    setPortMsg(null)
+    try {
+      const res = await removeWANPort(iface)
+      setWanPorts(res.wan_ports)
+      setPortMsg({ type: 'success', text: `WAN port ${iface} removed` })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to remove WAN port' })
+    }
+  }
+
+  const handleAddLan = async () => {
+    if (!newLan.interface || !newLan.ip || !newLan.subnet) return
+    setPortMsg(null)
+    try {
+      const res = await addLANPort({
+        interface: newLan.interface,
+        ip: newLan.ip,
+        subnet: newLan.subnet,
+        vlan_id: newLan.vlan_id ? Number(newLan.vlan_id) : undefined,
+        vlan_name: newLan.vlan_name || undefined,
+        dhcp_enabled: newLan.dhcp_enabled,
+        dhcp_range_start: newLan.dhcp_range_start || undefined,
+        dhcp_range_end: newLan.dhcp_range_end || undefined,
+      })
+      setLanPorts(res.lan_ports)
+      setNewLan({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
+      setShowAddLan(false)
+      setPortMsg({ type: 'success', text: 'LAN port added' })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to add LAN port' })
+    }
+  }
+
+  const handleRemoveLan = async (iface: string) => {
+    if (!confirm(`Remove LAN port ${iface}?`)) return
+    setPortMsg(null)
+    try {
+      const res = await removeLANPort(iface)
+      setLanPorts(res.lan_ports)
+      setPortMsg({ type: 'success', text: `LAN port ${iface} removed` })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to remove LAN port' })
+    }
+  }
 
   const update = <K extends keyof SettingsData>(
     section: K,
@@ -241,8 +335,135 @@ export default function SettingsPage() {
       )}
 
       <div className="space-y-6">
-        {/* Network */}
-        <Section title="Network" description="WAN/LAN interface configuration">
+        {/* Port management status */}
+        {portMsg && (
+          <div className={`rounded-md border p-3 text-[13px] flex items-center gap-2 ${
+            portMsg.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'
+          }`}>
+            {portMsg.type === 'success' ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <AlertTriangle className="h-4 w-4 flex-shrink-0" />}
+            {portMsg.text}
+          </div>
+        )}
+
+        {/* WAN Ports */}
+        <Section title="WAN Ports" description="Upstream (internet-facing) interfaces">
+          <div className="space-y-2">
+            {wanPorts.map((p) => (
+              <div key={p.interface} className="flex items-center justify-between px-3 py-2 rounded-md border border-border bg-background">
+                <div className="flex items-center gap-2">
+                  <Network className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-[13px] font-medium text-foreground">{p.interface}</span>
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${p.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {p.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+                <button onClick={() => handleRemoveWan(p.interface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            {wanPorts.length === 0 && <p className="text-[12px] text-muted-foreground">No WAN ports configured.</p>}
+          </div>
+          {showAddWan ? (
+            <div className="mt-3 flex items-end gap-2">
+              <div className="flex-1">
+                <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Interface</label>
+                <select value={newWanIface} onChange={(e) => setNewWanIface(e.target.value)} className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring">
+                  <option value="">Select interface...</option>
+                  {availableIfaces.map((i) => <option key={i.name} value={i.name}>{i.name} ({i.state})</option>)}
+                </select>
+              </div>
+              <button onClick={handleAddWan} disabled={!newWanIface} className="px-3 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors">Add</button>
+              <button onClick={() => setShowAddWan(false)} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowAddWan(true)} className="mt-3 inline-flex items-center gap-1 text-[13px] font-medium text-primary hover:text-primary/80 transition-colors">
+              <Plus className="h-3.5 w-3.5" /> Add WAN port
+            </button>
+          )}
+        </Section>
+
+        {/* LAN Ports */}
+        <Section title="LAN Ports" description="Client-facing interfaces with per-port DHCP and optional VLAN tagging">
+          <div className="space-y-3">
+            {lanPorts.map((p) => {
+              const effIface = p.vlan_id ? `${p.interface}.${p.vlan_id}` : p.interface
+              return (
+                <div key={effIface} className="rounded-md border border-border bg-background">
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Wifi className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-[13px] font-medium text-foreground">{effIface}</span>
+                      {p.vlan_id && <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">VLAN {p.vlan_id}{p.vlan_name ? ` — ${p.vlan_name}` : ''}</span>}
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${p.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {p.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <button onClick={() => handleRemoveLan(effIface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="px-3 pb-2 grid grid-cols-4 gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+                    <span><strong>IP:</strong> {p.ip}</span>
+                    <span><strong>Subnet:</strong> {p.subnet}</span>
+                    <span><strong>DHCP:</strong> {p.dhcp.enabled ? `${p.dhcp.range_start} – ${p.dhcp.range_end}` : 'Off'}</span>
+                    <span><strong>Lease:</strong> {p.dhcp.lease_time}</span>
+                  </div>
+                </div>
+              )
+            })}
+            {lanPorts.length === 0 && <p className="text-[12px] text-muted-foreground">No LAN ports configured.</p>}
+          </div>
+          {showAddLan ? (
+            <div className="mt-3 rounded-md border border-dashed border-border p-4 space-y-3">
+              <p className="text-[13px] font-semibold text-foreground">Add LAN Port</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Interface</label>
+                  <select value={newLan.interface} onChange={(e) => setNewLan({ ...newLan, interface: e.target.value })} className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring">
+                    <option value="">Select interface...</option>
+                    {availableIfaces.map((i) => <option key={i.name} value={i.name}>{i.name} ({i.state})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">IP Address</label>
+                  <input type="text" value={newLan.ip} onChange={(e) => setNewLan({ ...newLan, ip: e.target.value })} placeholder="10.0.2.1" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Subnet</label>
+                  <input type="text" value={newLan.subnet} onChange={(e) => setNewLan({ ...newLan, subnet: e.target.value })} placeholder="10.0.2.0/24" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">VLAN ID <span className="font-normal text-muted-foreground">(optional)</span></label>
+                  <input type="number" min={1} max={4094} value={newLan.vlan_id} onChange={(e) => setNewLan({ ...newLan, vlan_id: e.target.value })} placeholder="100" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">VLAN Name <span className="font-normal text-muted-foreground">(optional)</span></label>
+                  <input type="text" value={newLan.vlan_name} onChange={(e) => setNewLan({ ...newLan, vlan_name: e.target.value })} placeholder="Guest WiFi" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">DHCP Range Start</label>
+                  <input type="text" value={newLan.dhcp_range_start} onChange={(e) => setNewLan({ ...newLan, dhcp_range_start: e.target.value })} placeholder="Auto" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">DHCP Range End</label>
+                  <input type="text" value={newLan.dhcp_range_end} onChange={(e) => setNewLan({ ...newLan, dhcp_range_end: e.target.value })} placeholder="Auto" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button onClick={handleAddLan} disabled={!newLan.interface || !newLan.ip || !newLan.subnet} className="px-3 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors">Add LAN Port</button>
+                <button onClick={() => setShowAddLan(false)} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setShowAddLan(true)} className="mt-3 inline-flex items-center gap-1 text-[13px] font-medium text-primary hover:text-primary/80 transition-colors">
+              <Plus className="h-3.5 w-3.5" /> Add LAN port
+            </button>
+          )}
+        </Section>
+
+        {/* Network (legacy single-interface view) */}
+        <Section title="Network" description="Primary WAN/LAN interface configuration (legacy view)">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="WAN Interface" value={form.network.wan_interface} onChange={(v) => update('network', 'wan_interface', v)} placeholder="eth0" help="External-facing interface" />
             <Field label="LAN Interface" value={form.network.lan_interface} onChange={(v) => update('network', 'lan_interface', v)} placeholder="eth1" help="Client-facing interface" />
