@@ -406,7 +406,7 @@ export default function SettingsPage() {
                   <div className="px-3 pb-2 grid grid-cols-4 gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
                     <span><strong>IP:</strong> {p.ip}</span>
                     <span><strong>Subnet:</strong> {p.subnet}</span>
-                    <span><strong>DHCP:</strong> {p.dhcp.enabled ? `${p.dhcp.range_start} – ${p.dhcp.range_end}` : 'Off'}</span>
+                    <span><strong>DHCP:</strong> {p.dhcp.enabled ? `${p.dhcp.range_start || p.ip.replace(/\.\d+$/, '.100')} – ${p.dhcp.range_end || p.ip.replace(/\.\d+$/, '.250')}` : 'Off'}</span>
                     <span><strong>Lease:</strong> {p.dhcp.lease_time}</span>
                   </div>
                 </div>

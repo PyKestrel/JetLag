@@ -444,6 +444,7 @@ async def add_lan_port(payload: AddLANPortRequest):
 async def remove_lan_port(interface: str):
     """Remove a LAN port from the configuration. Use 'eth1.100' format for VLAN sub-interfaces."""
     original_len = len(settings.lan_ports)
+    removed = [p for p in settings.lan_ports if p.effective_interface == interface]
     settings.lan_ports = [p for p in settings.lan_ports if p.effective_interface != interface]
     if len(settings.lan_ports) == original_len:
         raise HTTPException(status_code=404, detail=f"LAN port {interface} not found")
@@ -454,6 +455,18 @@ async def remove_lan_port(interface: str):
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
     if settings.setup_completed and platform.system() == "Linux":
+        # Tear down the VLAN sub-interface if this was a VLAN port
+        for p in removed:
+            if p.vlan_id is not None:
+                try:
+                    subprocess.run(
+                        ["ip", "link", "delete", p.effective_interface],
+                        capture_output=True, timeout=5,
+                    )
+                    logger.info(f"VLAN sub-interface {p.effective_interface} removed")
+                except Exception as e:
+                    logger.error(f"Failed to remove VLAN sub-interface {p.effective_interface}: {e}")
+
         try:
             await DnsmasqService.generate_config()
             await DnsmasqService.restart()
