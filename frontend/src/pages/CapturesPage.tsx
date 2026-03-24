@@ -34,7 +34,7 @@ function CaptureActionMenu({ capture, onStop, onDelete }: {
         <MoreVertical className="h-4 w-4 text-muted-foreground" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 py-1">
+        <div className="absolute right-0 bottom-full mb-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 py-1">
           {capture.state === 'running' && (
             <button onClick={() => { onStop(); setOpen(false) }} className="w-full text-left px-3 py-1.5 text-[13px] text-foreground hover:bg-accent transition-colors flex items-center gap-2">
               <Square className="h-3.5 w-3.5 text-red-500" /> Stop Capture

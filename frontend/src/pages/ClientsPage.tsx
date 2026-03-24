@@ -36,7 +36,7 @@ function ActionMenu({ client, onAuth, onDeauth, loading }: {
         <MoreVertical className="h-4 w-4 text-muted-foreground" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 py-1">
+        <div className="absolute right-0 bottom-full mb-1 w-44 bg-card border border-border rounded-md shadow-lg z-20 py-1">
           {client.auth_state === 'pending' ? (
             <button
               onClick={() => { onAuth(client.id); setOpen(false) }}
