@@ -1,6 +1,6 @@
 # JetLag — Captive Portal Network Simulator
 
-> **Version:** 0.2.0 | **Platform:** Linux (Ubuntu 22.04+)
+> **Version:** 0.3.0 | **Platform:** Linux (Ubuntu 22.04+)
 
 ---
 
@@ -1298,4 +1298,4 @@ alembic revision --autogenerate -m "description of change"
 
 ---
 
-*Document generated from codebase analysis — JetLag v0.2.0*
+*Document generated from codebase analysis — JetLag v0.3.0*

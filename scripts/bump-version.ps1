@@ -20,8 +20,8 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $VersionFile = Join-Path $RootDir "VERSION"
-$PackageJson = Join-Path $RootDir "frontend" "package.json"
-$ConfluenceDoc = Join-Path $RootDir "docs" "confluence-jetlag.md"
+$PackageJson = Join-Path (Join-Path $RootDir "frontend") "package.json"
+$ConfluenceDoc = Join-Path (Join-Path $RootDir "docs") "confluence-jetlag.md"
 
 if (-not (Test-Path $VersionFile)) {
     Write-Error "VERSION file not found at $VersionFile"
