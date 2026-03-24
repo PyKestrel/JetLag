@@ -10,10 +10,11 @@ from app.database import init_db
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 
-from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup
+from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates
 from app.services.impairment import ImpairmentService
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
+from app.services.updater import auto_check_loop, run_post_update_health_check
 from app.version import __version__, get_version_info
 
 
@@ -76,6 +77,17 @@ async def lifespan(app: FastAPI):
         # Still try to initialize tc (has its own platform + setup guard)
         await ImpairmentService.initialize()
 
+    # Check if we need to finish a post-restart health check from an update
+    try:
+        await run_post_update_health_check()
+    except Exception as e:
+        logger.error(f"Post-update health check error: {e}")
+
+    # Start background update checker
+    import asyncio
+    asyncio.create_task(auto_check_loop())
+    logger.info("Background update checker started")
+
     yield
 
     logger.info("JetLag appliance shutting down...")
@@ -108,6 +120,7 @@ app.include_router(captures.router)
 app.include_router(logs.router)
 app.include_router(portal.router)
 app.include_router(settings.router)
+app.include_router(updates.router)
 
 
 @app.middleware("http")

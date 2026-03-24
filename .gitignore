@@ -128,6 +128,13 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# JetLag
+backups/
+backend/data/
+backend/venv/
+*.pyc
+__pycache__/
+
 # yarn v2
 .yarn/cache
 .yarn/unplugged

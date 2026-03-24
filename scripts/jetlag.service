@@ -1,0 +1,25 @@
+[Unit]
+Description=JetLag Captive Portal Network Simulator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/jetlag/backend
+Environment=JETLAG_CONFIG=/opt/jetlag/config/jetlag.yaml
+Environment=JETLAG_DB_DIR=/opt/jetlag/backend/data
+ExecStart=/opt/jetlag/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jetlag
+
+# Hardening
+ProtectSystem=false
+PrivateTmp=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

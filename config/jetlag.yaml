@@ -51,6 +51,13 @@ admin:
   # Frontend dev server (dev only)
   frontend_port: 3000
 
+updates:
+  auto_check: true
+  check_interval_hours: 6
+  github_repo: "PyKestrel/JetLag"
+  channel: "stable"
+  auto_download: false
+
 captures:
   output_dir: /var/lib/jetlag/captures
   max_file_size_mb: 100

@@ -17,6 +17,7 @@ import {
   User,
   BarChart3,
   Bug,
+  ArrowDownCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getVersion } from '@/lib/api'
@@ -68,6 +69,7 @@ const navSections: NavSection[] = [
     defaultOpen: false,
     items: [
       { to: '/settings', label: 'Settings', icon: Settings },
+      { to: '/updates', label: 'Updates', icon: ArrowDownCircle },
     ],
   },
 ]
@@ -79,6 +81,7 @@ const breadcrumbMap: Record<string, string[]> = {
   '/captures': ['Diagnostics', 'Captures'],
   '/logs': ['Diagnostics', 'Logs'],
   '/settings': ['Settings'],
+  '/updates': ['Settings', 'Updates'],
 }
 
 function SidebarSection({ section }: { section: NavSection }) {

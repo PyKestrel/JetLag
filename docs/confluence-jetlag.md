@@ -152,7 +152,7 @@ jetlag/
 │   │   ├── main.py              # App entrypoint, lifespan, middleware
 │   │   ├── version.py           # Reads VERSION file, exposes __version__
 │   │   ├── config.py            # Pydantic config models, YAML loader
-│   │   ├── database.py          # SQLite async engine, session factory
+│   │   ├── database.py          # SQLite async engine, session factory, Alembic runner
 │   │   ├── models/              # SQLAlchemy ORM models
 │   │   │   ├── client.py        # Client (mac, ip, auth_state)
 │   │   │   ├── impairment_profile.py  # ImpairmentProfile + MatchRule
@@ -170,14 +170,22 @@ jetlag/
 │   │   │   ├── logs.py          # /api/logs
 │   │   │   ├── portal.py        # /api/portal/accept, /api/portal/status
 │   │   │   ├── settings.py      # /api/settings
-│   │   │   └── setup.py         # /api/setup/*
+│   │   │   ├── setup.py         # /api/setup/*
+│   │   │   └── updates.py       # /api/updates/* (OTA update endpoints)
 │   │   └── services/            # Business logic & system wrappers
 │   │       ├── impairment.py    # tc/netem wrapper
 │   │       ├── firewall.py      # nftables wrapper
 │   │       ├── dnsmasq.py       # dnsmasq config generation & management
 │   │       ├── network.py       # ARP lookup, neighbour table, ping sweep
 │   │       ├── capture.py       # tcpdump wrapper
-│   │       └── logging_service.py  # Structured DB event logging
+│   │       ├── logging_service.py  # Structured DB event logging
+│   │       ├── updater.py       # OTA update pipeline, rollback, GitHub check
+│   │       └── process.py       # systemd service management helpers
+│   ├── alembic/                 # Database migrations
+│   │   ├── env.py               # Alembic environment config
+│   │   └── versions/            # Migration scripts
+│   │       └── 001_baseline.py  # Initial schema
+│   ├── alembic.ini              # Alembic configuration
 │   └── requirements.txt
 ├── frontend/                    # React admin SPA
 │   ├── src/
@@ -188,6 +196,7 @@ jetlag/
 │   │   │   ├── CapturesPage.tsx     # Start/stop/download packet captures
 │   │   │   ├── LogsPage.tsx         # Event log viewer with filtering
 │   │   │   ├── SettingsPage.tsx     # Appliance configuration editor
+│   │   │   ├── UpdatesPage.tsx      # OTA update management UI
 │   │   │   └── SetupWizard.tsx      # Initial setup wizard
 │   │   ├── lib/
 │   │   │   └── api.ts               # API client & TypeScript interfaces
@@ -197,11 +206,14 @@ jetlag/
 │   └── index.html               # "SkyConnect Airlines" branded page
 ├── config/
 │   └── jetlag.yaml              # Appliance configuration file
+├── backups/                     # Update backups (gitignored)
 └── scripts/
     ├── start-dev.sh             # Linux/macOS dev launcher
     ├── start-dev.ps1            # Windows dev launcher
     ├── bump-version.sh          # SemVer bump (Linux/macOS)
-    └── bump-version.ps1         # SemVer bump (Windows)
+    ├── bump-version.ps1         # SemVer bump (Windows)
+    ├── jetlag.service           # systemd unit file template
+    └── install-service.sh       # Install & enable systemd service
 ```
 
 ---
@@ -411,7 +423,26 @@ captures:
 | `output_dir` | string | `/var/lib/jetlag/captures` | Directory for .pcap output files |
 | `max_file_size_mb` | integer | `100` | Maximum size per capture file (tcpdump `-C` flag) |
 
-### 5.11 Logging
+### 5.11 Updates
+
+```yaml
+updates:
+  auto_check: true
+  check_interval_hours: 6
+  github_repo: "PyKestrel/JetLag"
+  channel: "stable"
+  auto_download: false
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `auto_check` | boolean | `true` | Periodically check GitHub for new releases |
+| `check_interval_hours` | integer | `6` | Hours between automatic update checks |
+| `github_repo` | string | `PyKestrel/JetLag` | GitHub `owner/repo` for the releases API |
+| `channel` | string | `stable` | `stable` = release only; `beta` = include pre-releases |
+| `auto_download` | boolean | `false` | (Future) automatically download but don't apply |
+
+### 5.12 Logging
 
 ```yaml
 logging:
@@ -689,6 +720,44 @@ Port endpoints return the updated port list in the response:
 | `GET` | `/api/health` | Returns `{"status": "ok", "service": "jetlag", "version": "0.2.0"}` |
 | `GET` | `/api/version` | Returns structured version info: `{"version": "0.2.0", "major": 0, "minor": 2, "patch": 0, "prerelease": null}` |
 
+### 7.10 Updates (OTA)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/updates/check` | Check GitHub Releases for a newer version. `?force=true` bypasses cache |
+| `POST` | `/api/updates/apply` | Start update pipeline. Body: `{"version": "0.3.0"}` |
+| `GET` | `/api/updates/status` | Get current/last update job state, progress %, step, log lines |
+| `POST` | `/api/updates/rollback` | Manually rollback to previous backup |
+| `GET` | `/api/updates/history` | List past update attempts with outcomes |
+| `GET` | `/api/updates/config` | Get update system settings |
+| `PUT` | `/api/updates/config` | Update settings (auto_check, interval, channel, repo) |
+
+**GET /api/updates/check** response:
+```json
+{
+  "available": true,
+  "current_version": "0.2.0",
+  "latest_version": "0.3.0",
+  "release_notes": "## What's New\n- Feature X\n- Bug fix Y",
+  "published_at": "2026-03-25T10:00:00Z",
+  "html_url": "https://github.com/PyKestrel/JetLag/releases/tag/v0.3.0",
+  "prerelease": false
+}
+```
+
+**GET /api/updates/status** response:
+```json
+{
+  "state": "in_progress",
+  "step": "install_deps",
+  "progress_pct": 70,
+  "message": "Installing Python dependencies...",
+  "target_version": "0.3.0",
+  "started_at": "2026-03-25T10:05:00Z",
+  "log_lines": ["[10:05:01] Running pre-flight checks...", "..."]
+}
+```
+
 ---
 
 ## 8. Admin UI Pages
@@ -704,6 +773,7 @@ The admin dashboard is a React SPA accessible at `http://<appliance-ip>:3000` (d
 | **Captures** | `/captures` | Start/stop tcpdump captures with filters, download .pcap files |
 | **Logs** | `/logs` | Searchable event log viewer with category and level filters |
 | **Settings** | `/settings` | Multi-port management (WAN/LAN add/remove with VLAN and per-port DHCP), plus all YAML configuration sections |
+| **Updates** | `/updates` | OTA update management: check for new versions, one-click update with progress, rollback, history, auto-check settings |
 
 ### Profile Creation Wizard (5 Steps — New Profiles)
 
@@ -846,6 +916,28 @@ Wildcard values (`0.0.0.0`, `0.0.0.0/0`) are skipped. If no match criteria remai
 | `log_impairment_event(db, message)` | Log impairment profile changes |
 | `log_capture_event(db, message, ip)` | Log capture start/stop events |
 | `log_system_event(db, message, level)` | Log general system events |
+
+### 10.7 UpdateService (`backend/app/services/updater.py`)
+
+| Function | Description |
+|---|---|
+| `check_for_update(force)` | Query GitHub Releases API, cache result. Returns `UpdateCheckResult` |
+| `start_update(version)` | Launch the 12-step update pipeline as a background task |
+| `trigger_rollback()` | Manually rollback to the most recent backup |
+| `get_status()` | Current update job state, progress %, step, log lines |
+| `get_check_result()` | Cached result of the last version check |
+| `get_history()` | Past update attempts with outcomes (persisted to JSON) |
+| `auto_check_loop()` | Background coroutine: periodic update check (runs every `check_interval_hours`) |
+| `run_post_update_health_check()` | Called on startup to finish health check after a systemd restart during update |
+
+### 10.8 ProcessService (`backend/app/services/process.py`)
+
+| Function | Description |
+|---|---|
+| `is_systemd_managed()` | Return True if running under systemd |
+| `restart_service(delay)` | Schedule a `systemctl restart jetlag.service` after a short delay |
+| `stop_service()` | Stop the jetlag systemd service |
+| `get_service_status()` | Return systemd unit properties (active state, PID, start time) |
 
 ---
 
@@ -1008,12 +1100,147 @@ git tag v<new-version>
 - Run `nft -c -f - <<< '...'` to validate ruleset syntax before applying
 
 ### Database schema errors after code update
-- Delete the existing database to force recreation: `rm backend/data/jetlag.db`
-- Restart the backend — tables will be auto-created
+- Alembic migrations now run automatically on startup — schema changes are applied non-destructively
+- If Alembic fails, the backend falls back to `create_all` (which only adds missing tables/columns)
+- If data is truly corrupt, delete the database to force recreation: `rm backend/data/jetlag.db`
+- Restart the backend — Alembic will create all tables from scratch
+
+### Update fails mid-pipeline
+- The update system automatically rolls back code, config, and database on any failure
+- If automatic rollback also fails, manually restore from the most recent backup:
+  ```bash
+  ls backups/          # find latest backup directory
+  cp backups/update-<timestamp>/jetlag.yaml config/jetlag.yaml
+  cp backups/update-<timestamp>/jetlag.db backend/data/jetlag.db
+  git checkout $(cat backups/update-<timestamp>/git_ref.txt)
+  systemctl restart jetlag
+  ```
+- Check update history at `/api/updates/history` or in `backups/update_history.json`
+
+### Update check shows no releases
+- Verify the GitHub repo is reachable: `curl https://api.github.com/repos/PyKestrel/JetLag/releases/latest`
+- Check the `updates.github_repo` config value matches your repository
+- Ensure the appliance has outbound internet access on the WAN interface
 
 ---
 
-## 14. Security Considerations
+## 14. OTA Update System
+
+JetLag includes a built-in over-the-air (OTA) update system that can be managed entirely from the Admin UI.
+
+### 14.1 Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Admin UI  (/updates)                                            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐             │
+│  │  Check   │ │  Apply   │ │ Progress │ │Rollback│             │
+│  │  button  │ │  button  │ │   bar    │ │ button │             │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘             │
+│       │             │            │            │                  │
+├───────┼─────────────┼────────────┼────────────┼──────────────────┤
+│  API  │/updates/    │/updates/   │/updates/   │/updates/         │
+│       │check        │apply       │status      │rollback          │
+├───────┼─────────────┼────────────┼────────────┼──────────────────┤
+│       └──────┬──────┴────────────┴────────────┘                  │
+│              ▼                                                    │
+│     updater.py  (backend/app/services/updater.py)                │
+│     ┌───────────────────────────────────────┐                    │
+│     │ 1. Pre-flight checks (disk, git)      │                    │
+│     │ 2. Backup config + DB + VERSION       │                    │
+│     │ 3. git fetch --tags origin            │                    │
+│     │ 4. Verify tag exists                  │                    │
+│     │ 5. Stop impairment profiles           │                    │
+│     │ 6. git checkout v<new>                │                    │
+│     │ 7. pip install + npm install          │                    │
+│     │ 8. npm run build                      │                    │
+│     │ 9. alembic upgrade head               │                    │
+│     │ 10. systemctl restart jetlag          │                    │
+│     │ 11. Health check (POST-restart)       │                    │
+│     │ 12. Re-enable profiles                │                    │
+│     └───────────────────────────────────────┘                    │
+│              │ failure at any step                                │
+│              ▼                                                    │
+│     Automatic rollback: git checkout <old>, restore backups      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 14.2 Update Pipeline Steps
+
+| Step | Name | Description |
+|---|---|---|
+| 1 | **Pre-flight** | Check disk space (≥500MB), verify git repo, record current HEAD |
+| 2 | **Backup** | Copy `config/jetlag.yaml`, `backend/data/jetlag.db`, and `VERSION` to `backups/update-<timestamp>/` |
+| 3 | **Fetch** | `git fetch --tags --force origin` |
+| 4 | **Verify** | Confirm tag `v<version>` exists locally |
+| 5 | **Stop services** | Disable active impairment profiles (save list for re-enable) |
+| 6 | **Apply code** | `git stash`, `git checkout v<version>`, `git clean -fd` (protected paths excluded) |
+| 7 | **Install deps** | `pip install -r requirements.txt` + `npm install` |
+| 8 | **Build frontend** | `npm run build` |
+| 9 | **Migrations** | `alembic upgrade head` |
+| 10 | **Restart** | `systemctl restart jetlag.service` (writes pending-update state to disk) |
+| 11 | **Health check** | New process polls `/api/health`, verifies version matches target |
+| 12 | **Post-flight** | Re-enable saved impairment profiles, clean old backups (keep last 3) |
+
+### 14.3 Protected Paths
+
+The following paths are **never deleted** during `git clean`:
+
+| Path | Contents |
+|---|---|
+| `config/` | User configuration (`jetlag.yaml`) |
+| `backend/data/` | SQLite database |
+| `backups/` | Update backups and history |
+| `backend/venv/` | Python virtual environment |
+| `frontend/node_modules/` | npm packages |
+| `.env` | Environment overrides |
+
+### 14.4 Backup & Rollback
+
+Each update creates a backup in `backups/update-<YYYYMMDD-HHMMSS>/` containing:
+- `jetlag.yaml` — config snapshot
+- `jetlag.db` — database snapshot
+- `VERSION` — previous version number
+- `git_ref.txt` — previous git commit hash
+- `active_profiles.json` — list of enabled profiles
+
+**Automatic rollback** triggers if any pipeline step fails. It restores the git ref, config, database, and reinstalls old dependencies.
+
+**Manual rollback** can be triggered from the UI or via `POST /api/updates/rollback`.
+
+The system keeps the **last 3 backups** and prunes older ones automatically.
+
+### 14.5 systemd Integration
+
+The backend runs as `jetlag.service` under systemd. Install with:
+
+```bash
+sudo bash scripts/install-service.sh [/path/to/jetlag]
+```
+
+Service commands:
+```bash
+systemctl status jetlag       # Check status
+systemctl restart jetlag      # Manual restart
+journalctl -u jetlag -f       # Stream logs
+```
+
+### 14.6 Database Migrations (Alembic)
+
+On every startup, the backend runs `alembic upgrade head` to apply any pending schema migrations. This ensures:
+- Existing data is preserved across updates
+- New columns/tables are added non-destructively
+- Pre-Alembic databases are auto-stamped at the baseline revision
+
+Migration files live in `backend/alembic/versions/`. To create a new migration after modifying models:
+```bash
+cd backend
+alembic revision --autogenerate -m "description of change"
+```
+
+---
+
+## 15. Security Considerations
 
 | Area | Implementation |
 |---|---|
@@ -1026,7 +1253,7 @@ git tag v<new-version>
 
 ---
 
-## 15. Example Impairment Profiles
+## 16. Example Impairment Profiles
 
 ### Airline Wi-Fi (Economy)
 ```json

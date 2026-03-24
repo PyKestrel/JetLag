@@ -92,6 +92,15 @@ class AdminConfig(BaseModel):
     frontend_port: int = 3000
 
 
+class UpdatesConfig(BaseModel):
+    """Configuration for the OTA update system."""
+    auto_check: bool = True
+    check_interval_hours: int = 6
+    github_repo: str = "PyKestrel/JetLag"
+    channel: str = "stable"  # "stable" = non-prerelease only; "beta" = include prereleases
+    auto_download: bool = False
+
+
 class CapturesConfig(BaseModel):
     output_dir: str = "/var/lib/jetlag/captures"
     max_file_size_mb: int = 100
@@ -121,6 +130,7 @@ class AppConfig(BaseModel):
     dns: DNSConfig = DNSConfig()
     portal: PortalConfig = PortalConfig()
     admin: AdminConfig = AdminConfig()
+    updates: UpdatesConfig = UpdatesConfig()
     captures: CapturesConfig = CapturesConfig()
     logging: LoggingConfig = LoggingConfig()
 

@@ -87,6 +87,60 @@ export interface VersionInfo {
 }
 export const getVersion = () => request<VersionInfo>('/version');
 
+// Updates
+export interface UpdateCheckResult {
+  available: boolean;
+  current_version: string;
+  latest_version: string | null;
+  release_notes: string | null;
+  published_at: string | null;
+  download_url: string | null;
+  html_url: string | null;
+  checked_at: string | null;
+  prerelease: boolean;
+}
+
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'in_progress' | 'restarting' | 'completed' | 'failed' | 'rolling_back';
+  step: string | null;
+  progress_pct: number;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  target_version: string | null;
+  log_lines: string[];
+}
+
+export interface UpdateHistoryEntry {
+  version: string;
+  outcome: string;
+  started_at: string;
+  completed_at: string;
+  error: string | null;
+}
+
+export interface UpdateConfig {
+  auto_check: boolean;
+  check_interval_hours: number;
+  github_repo: string;
+  channel: string;
+  auto_download: boolean;
+}
+
+export const checkForUpdate = (force = false) =>
+  request<UpdateCheckResult>(`/updates/check?force=${force}`);
+export const applyUpdate = (version: string) =>
+  request<UpdateStatus>('/updates/apply', { method: 'POST', body: JSON.stringify({ version }) });
+export const getUpdateStatus = () => request<UpdateStatus>('/updates/status');
+export const rollbackUpdate = () =>
+  request<{ message: string }>('/updates/rollback', { method: 'POST' });
+export const getUpdateHistory = () =>
+  request<{ history: UpdateHistoryEntry[] }>('/updates/history');
+export const getUpdateConfig = () => request<UpdateConfig>('/updates/config');
+export const updateUpdateConfig = (data: Partial<UpdateConfig>) =>
+  request<UpdateConfig>('/updates/config', { method: 'PUT', body: JSON.stringify(data) });
+
 // Port management
 export const listPorts = () => request<{ wan_ports: WANPort[]; lan_ports: LANPort[] }>('/setup/ports');
 export const addWANPort = (data: { interface: string; enabled?: boolean }) =>

@@ -7,6 +7,7 @@ import ProfilesPage from './pages/ProfilesPage'
 import CapturesPage from './pages/CapturesPage'
 import LogsPage from './pages/LogsPage'
 import SettingsPage from './pages/SettingsPage'
+import UpdatesPage from './pages/UpdatesPage'
 import SetupWizard from './pages/SetupWizard'
 import { getSetupStatus } from './lib/api'
 
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/captures" element={<CapturesPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/updates" element={<UpdatesPage />} />
       </Route>
     </Routes>
   )
