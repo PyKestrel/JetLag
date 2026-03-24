@@ -29,9 +29,21 @@ def _config_path() -> Path:
 
 
 def _detect_interfaces() -> list[dict]:
-    """Detect available network interfaces with their addresses and status."""
+    """Detect available network interfaces with their addresses and status.
+
+    VLAN sub-interfaces (e.g. ``ens20.100``) are excluded because JetLag
+    creates them automatically when a VLAN ID is specified on a LAN port.
+    Interfaces already assigned as WAN or LAN ports are also excluded.
+    """
     interfaces = []
     system = platform.system()
+
+    # Build a set of interface names already in use
+    used_ifaces: set[str] = set()
+    for wp in settings.wan_ports:
+        used_ifaces.add(wp.interface)
+    for lp in settings.lan_ports:
+        used_ifaces.add(lp.effective_interface)
 
     if system == "Linux":
         try:
@@ -45,6 +57,12 @@ def _detect_interfaces() -> list[dict]:
                 for iface in data:
                     name = iface.get("ifname", "")
                     if name == "lo":
+                        continue
+                    # Skip VLAN sub-interfaces (e.g. ens20.100)
+                    if "." in name:
+                        continue
+                    # Skip interfaces already assigned as WAN/LAN ports
+                    if name in used_ifaces:
                         continue
                     state = iface.get("operstate", "UNKNOWN")
                     mac = iface.get("address", "")
@@ -139,6 +157,42 @@ class SetupRequest(BaseModel):
     dhcp_range_end: str = "10.0.1.250"
     dhcp_lease_time: str = "1h"
     dns_upstream: list[str] = ["1.1.1.1", "8.8.8.8"]
+
+
+def _cleanup_orphaned_vlans():
+    """Remove VLAN sub-interfaces from Linux that are not in the current config.
+
+    This handles stale sub-interfaces left over from previous sessions
+    (e.g. ens20.2222) that were created but never properly cleaned up.
+    """
+    if platform.system() != "Linux":
+        return
+
+    # Collect the set of VLAN sub-interfaces we *should* have
+    expected_vlans: set[str] = set()
+    for lp in settings.lan_ports:
+        if lp.vlan_id is not None:
+            expected_vlans.add(lp.effective_interface)
+
+    try:
+        import json as _json
+        result = subprocess.run(
+            ["ip", "-j", "link", "show", "type", "vlan"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return
+        vlan_ifaces = _json.loads(result.stdout)
+        for iface in vlan_ifaces:
+            name = iface.get("ifname", "")
+            if name and name not in expected_vlans:
+                logger.info(f"Removing orphaned VLAN sub-interface: {name}")
+                subprocess.run(
+                    ["ip", "link", "delete", name],
+                    capture_output=True, timeout=5,
+                )
+    except Exception as e:
+        logger.warning(f"Failed to clean up orphaned VLAN interfaces: {e}")
 
 
 def _persist_config():

@@ -41,6 +41,14 @@ async def lifespan(app: FastAPI):
     import platform
 
     if cfg.setup_completed and platform.system() == "Linux":
+        # Clean up orphaned VLAN sub-interfaces from previous sessions
+        try:
+            from app.routers.setup import _cleanup_orphaned_vlans
+            _cleanup_orphaned_vlans()
+            logger.info("Orphaned VLAN cleanup completed")
+        except Exception as e:
+            logger.error(f"Failed to clean up orphaned VLANs: {e}")
+
         # Initialize tc/netem root qdisc
         try:
             await ImpairmentService.initialize()
