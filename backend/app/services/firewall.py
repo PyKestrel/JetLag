@@ -66,6 +66,9 @@ class FirewallService:
             for wi in wan_ifaces:
                 forward_rules.append(f'        iifname "{li}" ip saddr @authenticated_ips oifname "{wi}" accept')
                 forward_rules.append(f'        iifname "{wi}" oifname "{li}" ct state established,related accept')
+                # Reject QUIC (UDP 443) from unauthenticated clients so browsers
+                # get an ICMP error and fall back to TCP HTTPS immediately
+                forward_rules.append(f'        iifname "{li}" oifname "{wi}" udp dport 443 reject')
                 forward_rules.append(f'        iifname "{li}" oifname "{wi}" drop')
         forward_block = "\n".join(forward_rules)
 
@@ -128,6 +131,13 @@ table inet jetlag {{
             logger.error(f"Failed to allow client {ip}: {err}")
         else:
             logger.info(f"Client {ip} ({mac}) added to authenticated set")
+
+        # Flush conntrack entries for this client so stale DNAT mappings
+        # from captive-portal interception don't corrupt post-auth traffic
+        # (fixes ERR_QUIC_PROTOCOL_ERROR / stale NAT for HTTPS)
+        ct_cmd = f"conntrack -D -s {ip} 2>/dev/null; conntrack -D -d {ip} 2>/dev/null"
+        await FirewallService._run(ct_cmd)
+        logger.debug(f"Flushed conntrack entries for {ip}")
 
     @staticmethod
     async def intercept_client(ip: str, mac: Optional[str] = None):

@@ -28,6 +28,7 @@ apt-get update -qq
 apt-get install -y -qq \
     dnsmasq \
     nftables \
+    conntrack \
     iproute2 \
     tcpdump \
     openssl \
