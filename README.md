@@ -116,9 +116,6 @@ Installs all dependencies and launches both servers:
 ```bash
 # Linux / macOS
 bash scripts/start-dev.sh
-
-# Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1
 ```
 
 This starts:
