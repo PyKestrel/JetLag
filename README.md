@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="React"/>
   <img src="https://img.shields.io/badge/fastapi-0.115-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/platform-Ubuntu_22.04+-e95420?style=flat-square&logo=ubuntu&logoColor=white" alt="Ubuntu"/>
-  <img src="https://img.shields.io/badge/license-internal-444?style=flat-square" alt="License"/>
+  <img src="https://img.shields.io/badge/license-GPLv3-blue?style=flat-square" alt="License"/>
 </p>
 
 <p align="center">
@@ -295,4 +295,6 @@ updates:
 
 ## License
 
-Internal tool — not for redistribution.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+You are free to use, modify, and distribute this software under the terms of the GPLv3. See the [LICENSE](LICENSE) file for the full text.
