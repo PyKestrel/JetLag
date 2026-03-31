@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="4" y="4" width="112" height="112" rx="24" fill="#1e293b"/>
+  <!-- Wifi/signal arcs (top-right area) -->
+  <g stroke="url(#glow)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.35">
+    <path d="M60,38 A32,32 0 0,1 92,70"/>
+    <path d="M60,48 A22,22 0 0,1 82,70"/>
+    <path d="M60,58 A12,12 0 0,1 72,70"/>
+  </g>
+  <!-- Jet / paper-plane icon -->
+  <g transform="translate(28,32)">
+    <path d="M0,36 L26,26 L56,4 L32,34 L38,56 L26,38 Z"
+          fill="url(#glow)" opacity="0.95"/>
+    <path d="M26,26 L32,34"
+          stroke="#1e293b" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <!-- Small dot at signal origin -->
+  <circle cx="60" cy="70" r="3.5" fill="#f97316"/>
+</svg>

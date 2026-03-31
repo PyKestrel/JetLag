@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 260" width="900" height="260">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="260" rx="16" fill="url(#bg)"/>
+
+  <!-- Subtle grid pattern -->
+  <g stroke="#334155" stroke-width="0.5" opacity="0.3">
+    <line x1="0" y1="65" x2="900" y2="65"/>
+    <line x1="0" y1="130" x2="900" y2="130"/>
+    <line x1="0" y1="195" x2="900" y2="195"/>
+    <line x1="180" y1="0" x2="180" y2="260"/>
+    <line x1="360" y1="0" x2="360" y2="260"/>
+    <line x1="540" y1="0" x2="540" y2="260"/>
+    <line x1="720" y1="0" x2="720" y2="260"/>
+  </g>
+
+  <!-- Logo mark -->
+  <g transform="translate(80,50)">
+    <!-- Rounded square -->
+    <rect x="0" y="0" width="100" height="100" rx="20" fill="#1e3a5f" opacity="0.5"/>
+    <rect x="0" y="0" width="100" height="100" rx="20" fill="none" stroke="#f97316" stroke-width="2" opacity="0.6"/>
+
+    <!-- Wifi arcs -->
+    <g stroke="#f97316" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.35">
+      <path d="M50,28 A28,28 0 0,1 78,56"/>
+      <path d="M50,38 A18,18 0 0,1 68,56"/>
+      <path d="M50,48 A8,8 0 0,1 58,56"/>
+    </g>
+
+    <!-- Jet icon -->
+    <g transform="translate(12,18)">
+      <path d="M0,32 L22,22 L50,4 L28,30 L34,50 L22,34 Z"
+            fill="url(#glow)" opacity="0.95"/>
+      <path d="M22,22 L28,30" stroke="#0f172a" stroke-width="1.5" stroke-linecap="round"/>
+    </g>
+    <circle cx="50" cy="56" r="3" fill="#f97316"/>
+  </g>
+
+  <!-- Title text -->
+  <text x="210" y="105" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="60" font-weight="800" fill="url(#textGrad)" letter-spacing="-1">JetLag</text>
+
+  <!-- Tagline -->
+  <text x="210" y="135" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" fill="#94a3b8" letter-spacing="0.5">Captive Portal Network Simulation Appliance</text>
+
+  <!-- Feature pills -->
+  <g transform="translate(80, 175)">
+    <rect x="0" y="0" width="145" height="32" rx="16" fill="#1e3a5f" opacity="0.5"/>
+    <text x="72" y="21" font-family="system-ui, sans-serif" font-size="13" fill="#f97316" text-anchor="middle" font-weight="600">Captive Portal</text>
+
+    <rect x="160" y="0" width="170" height="32" rx="16" fill="#1e3a5f" opacity="0.5"/>
+    <text x="245" y="21" font-family="system-ui, sans-serif" font-size="13" fill="#f97316" text-anchor="middle" font-weight="600">Traffic Impairment</text>
+
+    <rect x="345" y="0" width="150" height="32" rx="16" fill="#1e3a5f" opacity="0.5"/>
+    <text x="420" y="21" font-family="system-ui, sans-serif" font-size="13" fill="#f97316" text-anchor="middle" font-weight="600">Packet Capture</text>
+
+    <rect x="510" y="0" width="130" height="32" rx="16" fill="#1e3a5f" opacity="0.5"/>
+    <text x="575" y="21" font-family="system-ui, sans-serif" font-size="13" fill="#f97316" text-anchor="middle" font-weight="600">OTA Updates</text>
+
+    <rect x="655" y="0" width="130" height="32" rx="16" fill="#1e3a5f" opacity="0.5"/>
+    <text x="720" y="21" font-family="system-ui, sans-serif" font-size="13" fill="#f97316" text-anchor="middle" font-weight="600">VLAN Support</text>
+  </g>
+
+  <!-- Version badge -->
+  <g transform="translate(790, 18)">
+    <rect width="70" height="24" rx="12" fill="#f97316" opacity="0.15"/>
+    <text x="35" y="16" font-family="system-ui, monospace" font-size="12" fill="#f97316" text-anchor="middle" font-weight="600">v0.3.3</text>
+  </g>
+</svg>
