@@ -103,13 +103,21 @@ table inet jetlag {{
 {postrouting_block}
     }}
 
+    chain custom_forward {{
+    }}
+
+    chain custom_input {{
+    }}
+
     chain forward {{
         type filter hook forward priority filter; policy drop;
+        jump custom_forward
 {forward_block}
     }}
 
     chain input {{
         type filter hook input priority filter; policy accept;
+        jump custom_input
 {input_block}
     }}
 }}
@@ -175,3 +183,99 @@ table inet jetlag {{
         except (json.JSONDecodeError, KeyError):
             pass
         return []
+
+    # ── User-defined firewall rules ──────────────────────────────
+
+    @staticmethod
+    async def apply_custom_rules(rules) -> None:
+        """Flush and rebuild custom_forward / custom_input chains from DB rules.
+
+        Rules are expected to be a list of FirewallRule model instances (or any
+        object with the same attributes).
+        """
+        # Flush existing custom chains (create them if they don't exist yet)
+        for chain in ("custom_forward", "custom_input"):
+            # Ensure chain exists
+            await FirewallService._run(
+                f"nft add chain inet jetlag {chain} 2>/dev/null"
+            )
+            # Flush it
+            await FirewallService._run(
+                f"nft flush chain inet jetlag {chain}"
+            )
+
+        for rule in rules:
+            nft_rule = FirewallService._build_nft_rule(rule)
+            if nft_rule:
+                chain = "custom_input" if rule.direction == "inbound" else "custom_forward"
+                cmd = f'nft add rule inet jetlag {chain} {nft_rule}'
+                out, err, rc = await FirewallService._run(cmd)
+                if rc != 0:
+                    logger.error(f"Failed to apply rule {rule.id} ({rule.name}): {err}")
+                else:
+                    logger.debug(f"Applied rule {rule.id}: {cmd}")
+
+        logger.info(f"Applied {len(rules)} custom firewall rules")
+
+    @staticmethod
+    def _build_nft_rule(rule) -> str:
+        """Convert a FirewallRule model instance into an nftables rule string."""
+        parts = []
+
+        # Protocol match
+        proto = getattr(rule, "protocol", "any") or "any"
+        if proto != "any":
+            parts.append(f"{proto}")
+
+        # Source IP
+        if rule.src_ip:
+            parts.append(f"ip saddr {rule.src_ip}")
+
+        # Destination IP
+        if rule.dst_ip:
+            parts.append(f"ip daddr {rule.dst_ip}")
+
+        # Source port (requires tcp/udp)
+        if rule.src_port:
+            if proto in ("tcp", "udp"):
+                parts.append(f"{proto} sport {rule.src_port}")
+            else:
+                # If protocol is 'any', we can't match a port without specifying
+                # a transport protocol — skip port match
+                pass
+
+        # Destination port (requires tcp/udp)
+        if rule.dst_port:
+            if proto in ("tcp", "udp"):
+                parts.append(f"{proto} dport {rule.dst_port}")
+            else:
+                pass
+
+        # Action
+        action = getattr(rule, "action", "drop") or "drop"
+        parts.append(action)
+
+        # Comment
+        comment = getattr(rule, "comment", None) or getattr(rule, "name", "")
+        if comment:
+            safe = comment.replace('"', '\\"')[:64]
+            parts.append(f'comment "{safe}"')
+
+        return " ".join(parts)
+
+    @staticmethod
+    async def get_ruleset_summary() -> dict:
+        """Return a summary of the current nftables ruleset."""
+        out, err, rc = await FirewallService._run("nft list ruleset")
+        if rc != 0:
+            return {"error": err, "ruleset": ""}
+
+        # Count chains and rules
+        chains = out.count("chain ")
+        rules = out.count(" accept") + out.count(" drop") + out.count(" reject") + out.count(" masquerade") + out.count(" dnat")
+
+        return {
+            "ruleset": out,
+            "chains": chains,
+            "rules_count": rules,
+        }

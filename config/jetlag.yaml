@@ -45,6 +45,27 @@ portal:
   ssl_cert: /etc/jetlag/ssl/portal.crt
   ssl_key: /etc/jetlag/ssl/portal.key
   ssl_cn: "wifi.airline.com"
+  # Portal type: click_through | web_login | tiered | time_limited | walled_garden
+  portal_type: click_through
+  # Web-login credentials (portal_type: web_login)
+  login_username: guest
+  login_password: guest
+  # Session duration in minutes (portal_type: time_limited)
+  session_duration_minutes: 60
+  # Tiered plans (portal_type: tiered)
+  tiered_plans:
+    - name: "Basic (30 min)"
+      duration_minutes: 30
+    - name: "Standard (2 hr)"
+      duration_minutes: 120
+    - name: "Premium (unlimited)"
+      duration_minutes: 0
+  # Domains accessible without auth (portal_type: walled_garden)
+  walled_garden_domains: []
+  # Redirect URL after authentication
+  redirect_url: "https://www.google.com"
+  # Welcome message shown on portal page
+  welcome_message: "Welcome aboard! Please accept the terms to continue."
 
 admin:
   api_port: 8080

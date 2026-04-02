@@ -152,6 +152,129 @@ export const addLANPort = (data: AddLANPortRequest) =>
 export const removeLANPort = (iface: string) =>
   request<{ message: string; lan_ports: LANPort[] }>(`/setup/ports/lan/${iface}`, { method: 'DELETE' });
 
+// Firewall Rules
+export interface FirewallRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  direction: string;
+  action: string;
+  protocol: string;
+  src_ip: string | null;
+  dst_ip: string | null;
+  src_port: string | null;
+  dst_port: string | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FirewallRuleCreate {
+  name: string;
+  enabled?: boolean;
+  priority?: number;
+  direction?: string;
+  action?: string;
+  protocol?: string;
+  src_ip?: string | null;
+  dst_ip?: string | null;
+  src_port?: string | null;
+  dst_port?: string | null;
+  comment?: string | null;
+}
+
+export const getFirewallRules = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<FirewallRule>>(`/firewall/rules${qs}`);
+};
+export const createFirewallRule = (data: FirewallRuleCreate) =>
+  request<FirewallRule>('/firewall/rules', { method: 'POST', body: JSON.stringify(data) });
+export const updateFirewallRule = (id: number, data: Partial<FirewallRuleCreate>) =>
+  request<FirewallRule>(`/firewall/rules/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteFirewallRule = (id: number) =>
+  request<{ message: string }>(`/firewall/rules/${id}`, { method: 'DELETE' });
+export const applyFirewallRules = () =>
+  request<{ message: string }>('/firewall/rules/apply', { method: 'POST' });
+export const getFirewallStatus = () =>
+  request<{ ruleset: string; chains: number; rules_count: number }>('/firewall/status');
+
+// Router Management
+export interface StaticRoute {
+  id: number; destination: string; gateway: string | null; interface: string | null;
+  metric: number; enabled: boolean; comment: string | null;
+}
+export interface NatRule {
+  id: number; name: string; type: string; protocol: string;
+  src_ip: string | null; dst_ip: string | null; src_port: string | null; dst_port: string | null;
+  to_address: string | null; to_port: string | null; interface: string | null;
+  enabled: boolean; comment: string | null;
+}
+export interface DHCPReservation {
+  id: number; mac_address: string; ip_address: string; hostname: string | null; comment: string | null;
+}
+
+export const getKernelRoutes = () => request<{ routes: unknown[] }>('/router/routes');
+export const getStaticRoutes = () => request<{ items: StaticRoute[] }>('/router/routes/static');
+export const addStaticRoute = (data: Partial<StaticRoute>) =>
+  request<StaticRoute>('/router/routes/static', { method: 'POST', body: JSON.stringify(data) });
+export const deleteStaticRoute = (id: number) =>
+  request<{ message: string }>(`/router/routes/static/${id}`, { method: 'DELETE' });
+
+export const getNatRules = () => request<{ items: NatRule[] }>('/router/nat');
+export const addNatRule = (data: Partial<NatRule>) =>
+  request<NatRule>('/router/nat', { method: 'POST', body: JSON.stringify(data) });
+export const deleteNatRule = (id: number) =>
+  request<{ message: string }>(`/router/nat/${id}`, { method: 'DELETE' });
+
+export const getInterfaces = () => request<{ interfaces: unknown[] }>('/router/interfaces');
+export const updateInterface = (name: string, data: { ip_address?: string; state?: string; mtu?: number }) =>
+  request<{ interface: string; results: unknown[] }>(`/router/interfaces/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const getArpTable = () => request<{ entries: unknown[] }>('/router/arp');
+export const flushArp = () => request<{ message: string }>('/router/arp', { method: 'DELETE' });
+
+export const getSysctls = () => request<{ sysctls: Record<string, string | null> }>('/router/sysctl');
+export const setSysctls = (values: Record<string, string>) =>
+  request<{ results: Record<string, { success: boolean; error?: string }> }>('/router/sysctl', { method: 'PUT', body: JSON.stringify({ values }) });
+
+// Portal Config
+export interface PortalConfigData {
+  portal_type: string;
+  welcome_message: string;
+  redirect_url: string;
+  session_duration_minutes: number;
+  tiered_plans: TieredPlan[];
+  walled_garden_domains: string[];
+  requires_login: boolean;
+}
+
+export interface TieredPlan {
+  name: string;
+  duration_minutes: number;
+}
+
+export interface PortalConfigUpdate {
+  portal_type?: string;
+  login_username?: string;
+  login_password?: string;
+  session_duration_minutes?: number;
+  tiered_plans?: TieredPlan[];
+  walled_garden_domains?: string[];
+  redirect_url?: string;
+  welcome_message?: string;
+}
+
+export const getPortalConfig = () => request<PortalConfigData>('/portal/config');
+export const updatePortalConfig = (data: PortalConfigUpdate) =>
+  request<{ message: string; portal_type: string }>('/portal/config', { method: 'PUT', body: JSON.stringify(data) });
+
+export const getDhcpReservations = () => request<{ items: DHCPReservation[] }>('/router/dhcp/reservations');
+export const addDhcpReservation = (data: Partial<DHCPReservation>) =>
+  request<DHCPReservation>('/router/dhcp/reservations', { method: 'POST', body: JSON.stringify(data) });
+export const deleteDhcpReservation = (id: number) =>
+  request<{ message: string }>(`/router/dhcp/reservations/${id}`, { method: 'DELETE' });
+
 // Types
 export interface PaginatedResponse<T> {
   items: T[];
@@ -356,6 +479,14 @@ export interface SettingsPortal {
   ssl_cert: string;
   ssl_key: string;
   ssl_cn: string;
+  portal_type: string;
+  login_username: string;
+  login_password: string;
+  session_duration_minutes: number;
+  tiered_plans: TieredPlan[];
+  walled_garden_domains: string[];
+  redirect_url: string;
+  welcome_message: string;
 }
 
 export interface SettingsAdmin {

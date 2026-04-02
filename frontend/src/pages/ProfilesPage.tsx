@@ -581,6 +581,16 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose, rule
                     </button>
                   ))}
                 </div>
+                {form.direction === 'both' && (
+                  <div className="mt-3 rounded-md bg-blue-50 border border-blue-200 px-4 py-2.5 text-[12px] text-blue-800 flex items-start gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-blue-500" />
+                    <span>
+                      <strong>Split mode:</strong> When direction is <em>Both</em>, additive values (latency, jitter, bandwidth) are automatically split evenly across inbound and outbound.
+                      For example, 500ms latency becomes 250ms per direction for a 500ms total round-trip.
+                      Probability values (loss, corruption, reorder, duplication) are applied as-is to each direction.
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

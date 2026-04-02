@@ -18,6 +18,9 @@ import {
   BarChart3,
   Bug,
   ArrowDownCircle,
+  ShieldAlert,
+  Router,
+  Wifi,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getVersion } from '@/lib/api'
@@ -44,6 +47,8 @@ const navSections: NavSection[] = [
     defaultOpen: true,
     items: [
       { to: '/clients', label: 'Clients', icon: Monitor },
+      { to: '/router', label: 'Router', icon: Router },
+      { to: '/portal', label: 'Captive Portal', icon: Wifi },
     ],
   },
   {
@@ -52,6 +57,7 @@ const navSections: NavSection[] = [
     defaultOpen: false,
     items: [
       { to: '/profiles', label: 'Impairment Profiles', icon: Gauge },
+      { to: '/firewall', label: 'Firewall Rules', icon: ShieldAlert },
     ],
   },
   {
@@ -78,6 +84,9 @@ const breadcrumbMap: Record<string, string[]> = {
   '/overview': ['Overview'],
   '/clients': ['Networks', 'Clients'],
   '/profiles': ['Traffic policies', 'Impairment Profiles'],
+  '/firewall': ['Traffic policies', 'Firewall Rules'],
+  '/router': ['Networks', 'Router'],
+  '/portal': ['Networks', 'Captive Portal'],
   '/captures': ['Diagnostics', 'Captures'],
   '/logs': ['Diagnostics', 'Logs'],
   '/settings': ['Settings'],
