@@ -11,6 +11,7 @@ import UpdatesPage from './pages/UpdatesPage'
 import FirewallPage from './pages/FirewallPage'
 import RouterPage from './pages/RouterPage'
 import CaptivePortalPage from './pages/CaptivePortalPage'
+import WirelessPage from './pages/WirelessPage'
 import SetupWizard from './pages/SetupWizard'
 import { getSetupStatus } from './lib/api'
 
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/firewall" element={<FirewallPage />} />
         <Route path="/router" element={<RouterPage />} />
         <Route path="/portal" element={<CaptivePortalPage />} />
+        <Route path="/wireless" element={<WirelessPage />} />
       </Route>
     </Routes>
   )

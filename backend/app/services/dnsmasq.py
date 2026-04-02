@@ -60,6 +60,22 @@ class DnsmasqService:
                 lines.append(f"dhcp-option=tag:{tag},option:router,{lp.dhcp.gateway}")
                 lines.append(f"dhcp-option=tag:{tag},option:dns-server,{lp.dhcp.dns_server}")
 
+        # Wireless AP — add WLAN DHCP scope if enabled and not bridged
+        wcfg = cfg.wireless
+        if wcfg.enabled and not wcfg.bridge_to_lan:
+            wlan_iface = wcfg.interface
+            wlan_tag = f"wlan_{wlan_iface.replace('.', '_')}"
+            lines.append("")
+            lines.append(f"# Wireless AP: {wcfg.ssid} on {wlan_iface}")
+            lines.append(f"interface={wlan_iface}")
+            listen_addrs.add(wcfg.ip)
+
+            lines.append(
+                f"dhcp-range=set:{wlan_tag},{wcfg.dhcp_range_start},{wcfg.dhcp_range_end},{wcfg.dhcp_lease_time}"
+            )
+            lines.append(f"dhcp-option=tag:{wlan_tag},option:router,{wcfg.ip}")
+            lines.append(f"dhcp-option=tag:{wlan_tag},option:dns-server,{wcfg.ip}")
+
         # Listen addresses
         for addr in sorted(listen_addrs):
             lines.append(f"listen-address={addr}")

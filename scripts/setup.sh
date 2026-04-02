@@ -32,12 +32,19 @@ apt-get install -y -qq \
     iproute2 \
     tcpdump \
     openssl \
+    hostapd \
+    iw \
     python3 \
     python3-pip \
     python3-venv \
     nodejs \
     npm \
     curl
+
+# Disable hostapd system service — JetLag manages it directly
+systemctl stop hostapd 2>/dev/null || true
+systemctl disable hostapd 2>/dev/null || true
+systemctl mask hostapd 2>/dev/null || true
 
 # --- Create directories ---
 echo "[2/8] Creating directories..."

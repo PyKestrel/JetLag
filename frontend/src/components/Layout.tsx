@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   Router,
   Wifi,
+  Radio,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getVersion } from '@/lib/api'
@@ -49,6 +50,7 @@ const navSections: NavSection[] = [
       { to: '/clients', label: 'Clients', icon: Monitor },
       { to: '/router', label: 'Router', icon: Router },
       { to: '/portal', label: 'Captive Portal', icon: Wifi },
+      { to: '/wireless', label: 'Wireless AP', icon: Radio },
     ],
   },
   {
@@ -87,6 +89,7 @@ const breadcrumbMap: Record<string, string[]> = {
   '/firewall': ['Traffic policies', 'Firewall Rules'],
   '/router': ['Networks', 'Router'],
   '/portal': ['Networks', 'Captive Portal'],
+  '/wireless': ['Networks', 'Wireless AP'],
   '/captures': ['Diagnostics', 'Captures'],
   '/logs': ['Diagnostics', 'Logs'],
   '/settings': ['Settings'],

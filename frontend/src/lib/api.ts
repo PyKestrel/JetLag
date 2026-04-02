@@ -554,3 +554,108 @@ export interface SettingsData {
   captures: SettingsCaptures;
   logging: SettingsLogging;
 }
+
+// ── Wireless AP ──────────────────────────────────────────────
+
+export interface WirelessConfig {
+  enabled: boolean;
+  interface: string;
+  ssid: string;
+  channel: number;
+  hw_mode: string;
+  ieee80211n: boolean;
+  ieee80211ac: boolean;
+  wpa: number;
+  wpa_passphrase: string;
+  wpa_key_mgmt: string;
+  rsn_pairwise: string;
+  country_code: string;
+  ip: string;
+  subnet: string;
+  dhcp_range_start: string;
+  dhcp_range_end: string;
+  dhcp_lease_time: string;
+  bridge_to_lan: boolean;
+  max_clients: number;
+  hidden: boolean;
+}
+
+export interface WirelessConfigUpdate {
+  enabled?: boolean;
+  interface?: string;
+  ssid?: string;
+  channel?: number;
+  hw_mode?: string;
+  ieee80211n?: boolean;
+  ieee80211ac?: boolean;
+  wpa?: number;
+  wpa_passphrase?: string;
+  wpa_key_mgmt?: string;
+  rsn_pairwise?: string;
+  country_code?: string;
+  ip?: string;
+  subnet?: string;
+  dhcp_range_start?: string;
+  dhcp_range_end?: string;
+  dhcp_lease_time?: string;
+  bridge_to_lan?: boolean;
+  max_clients?: number;
+  hidden?: boolean;
+}
+
+export interface WlanInterface {
+  name: string;
+  driver: string;
+  phy: string;
+  mac: string;
+  mode: string;
+}
+
+export interface WirelessStatus {
+  running: boolean;
+  pid: number | null;
+  interface: string;
+  ssid: string;
+  channel: number;
+  clients_connected: number;
+  uptime: string | null;
+  error?: string;
+}
+
+export interface WirelessStation {
+  mac: string;
+  signal: string;
+  rx_bytes: string;
+  tx_bytes: string;
+  connected_time: string;
+}
+
+export const getWirelessInterfaces = () =>
+  request<{ interfaces: WlanInterface[]; count: number }>('/wireless/detect');
+
+export const getWirelessCapabilities = (iface: string) =>
+  request<Record<string, unknown>>(`/wireless/capabilities/${iface}`);
+
+export const getWirelessConfig = () =>
+  request<WirelessConfig>('/wireless/config');
+
+export const updateWirelessConfig = (data: WirelessConfigUpdate) =>
+  request<WirelessConfig>('/wireless/config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const startWirelessAP = () =>
+  request<{ success: boolean; message?: string }>('/wireless/start', { method: 'POST' });
+
+export const stopWirelessAP = () =>
+  request<{ success: boolean; message?: string }>('/wireless/stop', { method: 'POST' });
+
+export const restartWirelessAP = () =>
+  request<{ success: boolean; message?: string }>('/wireless/restart', { method: 'POST' });
+
+export const getWirelessStatus = () =>
+  request<WirelessStatus>('/wireless/status');
+
+export const getWirelessStations = () =>
+  request<{ stations: WirelessStation[]; count: number }>('/wireless/stations');

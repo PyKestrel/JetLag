@@ -67,6 +67,28 @@ portal:
   # Welcome message shown on portal page
   welcome_message: "Welcome aboard! Please accept the terms to continue."
 
+wireless:
+  enabled: false
+  interface: wlan0
+  ssid: "JetLag-WiFi"
+  channel: 6
+  hw_mode: g                    # a = 5GHz, g = 2.4GHz
+  ieee80211n: true              # 802.11n (HT)
+  ieee80211ac: false            # 802.11ac (VHT) — requires hw_mode: a
+  wpa: 2                        # 0 = open, 2 = WPA2
+  wpa_passphrase: "JetLag1234"
+  wpa_key_mgmt: WPA-PSK
+  rsn_pairwise: CCMP
+  country_code: US
+  ip: 10.0.2.1
+  subnet: 10.0.2.0/24
+  dhcp_range_start: 10.0.2.100
+  dhcp_range_end: 10.0.2.250
+  dhcp_lease_time: 1h
+  bridge_to_lan: false
+  max_clients: 32
+  hidden: false
+
 admin:
   api_port: 8080
   # Frontend dev server (dev only)

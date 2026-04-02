@@ -10,7 +10,7 @@ from app.database import init_db
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 
-from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt
+from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt, wireless
 from app.services.impairment import ImpairmentService
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
@@ -81,6 +81,18 @@ async def lifespan(app: FastAPI):
             logger.info("IP forwarding enabled")
         except Exception as e:
             logger.error(f"Failed to enable IP forwarding: {e}")
+
+        # Start wireless AP if enabled
+        if cfg.wireless.enabled:
+            try:
+                from app.services.hostapd import HostapdService
+                result = await HostapdService.start()
+                if result.get("success"):
+                    logger.info(f"Wireless AP started: SSID={cfg.wireless.ssid}")
+                else:
+                    logger.error(f"Failed to start wireless AP: {result.get('error')}")
+            except Exception as e:
+                logger.error(f"Failed to start wireless AP on startup: {e}")
     else:
         # Still try to initialize tc (has its own platform + setup guard)
         await ImpairmentService.initialize()
@@ -131,6 +143,7 @@ app.include_router(settings.router)
 app.include_router(updates.router)
 app.include_router(firewall.router)
 app.include_router(router_mgmt.router)
+app.include_router(wireless.router)
 
 
 @app.middleware("http")
@@ -162,6 +175,9 @@ async def captive_portal_middleware(request: Request, call_next):
     # Detect DNAT'd requests: Host header won't match any appliance IP
     host_header = (request.headers.get("host") or "").split(":")[0].lower()
     all_lan_ips = set(cfg.all_lan_ips())
+    # Include WLAN AP IP if wireless is enabled
+    if cfg.wireless.enabled:
+        all_lan_ips.add(cfg.wireless.ip)
     allowed_hosts = {"localhost", "127.0.0.1", "::1"} | all_lan_ips
     primary_lan_ip = cfg.network.lan_ip  # fallback for redirects
 
@@ -194,6 +210,11 @@ async def captive_portal_middleware(request: Request, call_next):
                 continue
             network = ipaddress.IPv4Network(lp.subnet, strict=False)
             if client_addr in network:
+                return await call_next(request)
+        # Also check WLAN subnet
+        if cfg.wireless.enabled and cfg.wireless.subnet:
+            wlan_net = ipaddress.IPv4Network(cfg.wireless.subnet, strict=False)
+            if client_addr in wlan_net:
                 return await call_next(request)
     except (ValueError, TypeError):
         # If we can't parse, allow the request (fail-open for dev)

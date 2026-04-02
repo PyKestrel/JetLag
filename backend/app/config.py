@@ -120,6 +120,33 @@ class UpdatesConfig(BaseModel):
     auto_download: bool = False
 
 
+class WirelessConfig(BaseModel):
+    """Configuration for the optional WLAN access point (hostapd)."""
+    enabled: bool = False
+    interface: str = "wlan0"
+    ssid: str = "JetLag-WiFi"
+    channel: int = 6
+    hw_mode: str = "g"                 # a = 5GHz, g = 2.4GHz
+    ieee80211n: bool = True            # 802.11n (HT)
+    ieee80211ac: bool = False          # 802.11ac (VHT) — requires hw_mode=a
+    wpa: int = 2                       # 0 = open, 2 = WPA2
+    wpa_passphrase: str = "JetLag1234"
+    wpa_key_mgmt: str = "WPA-PSK"
+    rsn_pairwise: str = "CCMP"
+    country_code: str = "US"
+    # Network: the WLAN AP gets its own subnet for DHCP
+    ip: str = "10.0.2.1"
+    subnet: str = "10.0.2.0/24"
+    dhcp_range_start: str = "10.0.2.100"
+    dhcp_range_end: str = "10.0.2.250"
+    dhcp_lease_time: str = "1h"
+    # Bridge mode: if True, bridge WLAN into the primary LAN port (no separate subnet)
+    bridge_to_lan: bool = False
+    max_clients: int = 32
+    # Hidden SSID
+    hidden: bool = False
+
+
 class CapturesConfig(BaseModel):
     output_dir: str = "/var/lib/jetlag/captures"
     max_file_size_mb: int = 100
@@ -150,6 +177,7 @@ class AppConfig(BaseModel):
     portal: PortalConfig = PortalConfig()
     admin: AdminConfig = AdminConfig()
     updates: UpdatesConfig = UpdatesConfig()
+    wireless: WirelessConfig = WirelessConfig()
     captures: CapturesConfig = CapturesConfig()
     logging: LoggingConfig = LoggingConfig()
 
