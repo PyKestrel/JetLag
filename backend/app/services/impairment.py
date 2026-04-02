@@ -15,6 +15,29 @@ _ifb_initialized = False
 _IFB_DEV = "ifb0"
 
 
+class _HalvedProfile:
+    """Proxy that halves additive impairment values for split-direction application.
+
+    When direction='both', the user-entered value (e.g. 500ms latency) should produce
+    500ms total RTT, so each direction gets half (250ms).  Probability-based values
+    (loss, corruption, reorder, duplicate) are NOT halved — they are per-packet rates.
+    """
+
+    _HALVED_ATTRS = frozenset({
+        'latency_ms', 'jitter_ms',
+        'bandwidth_limit_kbps', 'bandwidth_ceil_kbps', 'bandwidth_burst_kbytes',
+    })
+
+    def __init__(self, profile):
+        self._profile = profile
+
+    def __getattr__(self, name):
+        value = getattr(self._profile, name)
+        if name in self._HALVED_ATTRS and isinstance(value, (int, float)) and value > 0:
+            return type(value)(max(1, value // 2) if isinstance(value, int) else value / 2)
+        return value
+
+
 class ImpairmentService:
     """Wrapper around Linux tc/netem for network impairment."""
 
@@ -268,8 +291,12 @@ class ImpairmentService:
                 if direction == 'inbound':
                     return "IFB device initialization failed"
 
+        # When applying to both directions, halve additive values so the
+        # total round-trip matches the user's intended value.
+        effective_profile = _HalvedProfile(profile) if direction == 'both' else profile
+
         for dev in devices:
-            err = await ImpairmentService._apply_on_device(dev, profile)
+            err = await ImpairmentService._apply_on_device(dev, effective_profile)
             if err:
                 return err
 

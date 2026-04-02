@@ -8,6 +8,9 @@ import CapturesPage from './pages/CapturesPage'
 import LogsPage from './pages/LogsPage'
 import SettingsPage from './pages/SettingsPage'
 import UpdatesPage from './pages/UpdatesPage'
+import FirewallPage from './pages/FirewallPage'
+import RouterPage from './pages/RouterPage'
+import CaptivePortalPage from './pages/CaptivePortalPage'
 import SetupWizard from './pages/SetupWizard'
 import { getSetupStatus } from './lib/api'
 
@@ -45,6 +48,9 @@ export default function App() {
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/updates" element={<UpdatesPage />} />
+        <Route path="/firewall" element={<FirewallPage />} />
+        <Route path="/router" element={<RouterPage />} />
+        <Route path="/portal" element={<CaptivePortalPage />} />
       </Route>
     </Routes>
   )

@@ -85,6 +85,25 @@ class PortalConfig(BaseModel):
     ssl_cert: str = "/etc/jetlag/ssl/portal.crt"
     ssl_key: str = "/etc/jetlag/ssl/portal.key"
     ssl_cn: str = "wifi.airline.com"
+    # Portal type: click_through | web_login | tiered | time_limited | walled_garden
+    portal_type: str = "click_through"
+    # Web-login credentials (portal_type == "web_login")
+    login_username: str = "guest"
+    login_password: str = "guest"
+    # Time-limited session duration in minutes (portal_type == "time_limited")
+    session_duration_minutes: int = 60
+    # Tiered plan names/durations in minutes (portal_type == "tiered")
+    tiered_plans: list[dict] = [
+        {"name": "Basic (30 min)", "duration_minutes": 30},
+        {"name": "Standard (2 hr)", "duration_minutes": 120},
+        {"name": "Premium (unlimited)", "duration_minutes": 0},
+    ]
+    # Walled garden: allowed domains even when unauthenticated
+    walled_garden_domains: list[str] = []
+    # Redirect URL after auth
+    redirect_url: str = "https://www.google.com"
+    # Custom welcome message
+    welcome_message: str = "Welcome aboard! Please accept the terms to continue."
 
 
 class AdminConfig(BaseModel):
