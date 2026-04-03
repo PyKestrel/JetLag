@@ -23,16 +23,21 @@ def setup_logging():
 
     fmt = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 
-    # Try /var/log/jetlag first, fall back to ./logs
-    for log_dir in (Path("/var/log/jetlag"), Path(__file__).resolve().parent.parent / "logs"):
+    # Try /var/log/jetlag first, fall back to ./logs next to backend/
+    log_file = None
+    candidates = [
+        Path("/var/log/jetlag"),
+        Path(__file__).resolve().parent.parent / "logs",
+    ]
+    for log_dir in candidates:
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / "jetlag.log"
-            # Test we can write
-            log_file.touch(exist_ok=True)
+            test_file = log_dir / "jetlag.log"
+            test_file.touch(exist_ok=True)
+            log_file = test_file
             break
         except OSError:
-            log_file = None
+            continue
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     if log_file:
@@ -41,6 +46,9 @@ def setup_logging():
         )
         file_handler.setFormatter(logging.Formatter(fmt))
         handlers.append(file_handler)
+        print(f"[JetLag] Log file: {log_file}")
+    else:
+        print(f"[JetLag] WARNING: Could not create log file in any of: {[str(p) for p in candidates]}")
 
     logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
 
