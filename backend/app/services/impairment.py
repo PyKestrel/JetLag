@@ -152,8 +152,13 @@ class ImpairmentService:
         logger.info(f"tc root qdisc initialized on {iface}")
 
     @staticmethod
-    async def _apply_on_device(dev: str, profile) -> Optional[str]:
-        """Apply HTB class + netem qdisc + filters on a specific device."""
+    async def _apply_on_device(dev: str, profile, mirror_filters: bool = False) -> Optional[str]:
+        """Apply HTB class + netem qdisc + filters on a specific device.
+
+        When mirror_filters is True, src/dst IP and subnet fields in match
+        rules are swapped so that return traffic is correctly matched on the
+        IFB (ingress) device.
+        """
         pid = profile.id
         classid = ImpairmentService._build_classid(pid)
 
@@ -237,7 +242,10 @@ class ImpairmentService:
 
         # Add filters for match rules
         for rule in profile.match_rules:
-            filter_cmd = ImpairmentService._build_filter(dev, pid, classid, rule)
+            if mirror_filters:
+                filter_cmd = ImpairmentService._build_filter_mirrored(dev, pid, classid, rule)
+            else:
+                filter_cmd = ImpairmentService._build_filter(dev, pid, classid, rule)
             if filter_cmd:
                 out, err, rc = await ImpairmentService._run(filter_cmd)
                 if rc != 0:
@@ -296,12 +304,56 @@ class ImpairmentService:
         effective_profile = _HalvedProfile(profile) if direction == 'both' else profile
 
         for dev in devices:
-            err = await ImpairmentService._apply_on_device(dev, effective_profile)
+            # When direction is 'both', mirror the filter src/dst on the IFB
+            # device so return traffic (where the target IP is the source)
+            # is correctly matched.
+            mirror = (direction == 'both' and dev == _IFB_DEV)
+            err = await ImpairmentService._apply_on_device(dev, effective_profile, mirror_filters=mirror)
             if err:
                 return err
 
         logger.info(f"Applied impairment profile {profile.id} ({direction}): {profile.name}")
         return None
+
+    @staticmethod
+    def _build_filter_mirrored(iface: str, profile_id: int, classid: str, rule) -> Optional[str]:
+        """Build a tc filter with src/dst IP and subnet fields swapped.
+
+        Used on the IFB device when direction='both' so that return traffic
+        (where the original dst_ip is now the source) is matched correctly.
+        """
+        match_parts = []
+
+        # Swap: original dst_ip becomes src match, original src_ip becomes dst match
+        if rule.dst_ip and rule.dst_ip != '0.0.0.0':
+            match_parts.append(f"match ip src {ImpairmentService._normalize_ip(rule.dst_ip)}")
+        if rule.src_ip and rule.src_ip != '0.0.0.0':
+            match_parts.append(f"match ip dst {ImpairmentService._normalize_ip(rule.src_ip)}")
+        if rule.dst_subnet and rule.dst_subnet != '0.0.0.0/0':
+            match_parts.append(f"match ip src {rule.dst_subnet}")
+        if rule.src_subnet and rule.src_subnet != '0.0.0.0/0':
+            match_parts.append(f"match ip dst {rule.src_subnet}")
+
+        # Protocol and port stay the same direction
+        if rule.protocol == "tcp":
+            match_parts.append("match ip protocol 6 0xff")
+        elif rule.protocol == "udp":
+            match_parts.append("match ip protocol 17 0xff")
+        elif rule.protocol == "icmp":
+            match_parts.append("match ip protocol 1 0xff")
+        if rule.port:
+            match_parts.append(f"match ip sport {rule.port} 0xffff")
+
+        if not match_parts:
+            match_parts.append("match u32 0 0 at 0")
+
+        match_str = " ".join(match_parts)
+        prio = 10 + profile_id
+
+        return (
+            f"tc filter add dev {iface} parent 1:0 protocol ip prio {prio} "
+            f"u32 {match_str} flowid {classid}"
+        )
 
     @staticmethod
     def _normalize_ip(ip: str) -> str:
