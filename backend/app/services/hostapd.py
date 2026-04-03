@@ -249,11 +249,13 @@ class HostapdService:
             f"channel={channel}",
         ]
 
-        # In hotspot mode the virtual AP shares the physical radio which
-        # already has its regulatory domain from the station connection.
-        # Setting country_code again triggers a COUNTRY_UPDATE that fails
-        # with "Failed to set beacon parameters".
-        if not cfg.hotspot_mode:
+        if cfg.hotspot_mode:
+            # Hotspot mode: minimal config for concurrent station+AP.
+            # - No country_code (radio inherits from station connection)
+            # - noscan=1 prevents AP from triggering scans that disrupt station
+            lines.append("noscan=1")
+        else:
+            # Standalone AP mode: full regulatory config
             lines.append(f"country_code={cfg.country_code}")
             lines.append("ieee80211d=1")
 
@@ -274,22 +276,31 @@ class HostapdService:
         else:
             lines.append("ignore_broadcast_ssid=0")
 
-        # 802.11n / HT
-        if cfg.ieee80211n:
-            lines.append("ieee80211n=1")
+        if cfg.hotspot_mode:
+            # Hotspot mode: keep config minimal — no HT/VHT/HE to avoid
+            # capability mismatches with the shared radio.  Basic g/a mode
+            # is the most compatible for concurrent operation.
+            lines.append("ieee80211n=0")
+            lines.append("ieee80211ac=0")
             lines.append("wmm_enabled=1")
         else:
-            lines.append("ieee80211n=0")
+            # Standalone AP: full feature set
+            # 802.11n / HT
+            if cfg.ieee80211n:
+                lines.append("ieee80211n=1")
+                lines.append("wmm_enabled=1")
+            else:
+                lines.append("ieee80211n=0")
 
-        # 802.11ac / VHT (requires 5GHz)
-        if cfg.ieee80211ac and hw_mode == "a":
-            lines.append("ieee80211ac=1")
-        else:
-            lines.append("ieee80211ac=0")
+            # 802.11ac / VHT (requires 5GHz)
+            if cfg.ieee80211ac and hw_mode == "a":
+                lines.append("ieee80211ac=1")
+            else:
+                lines.append("ieee80211ac=0")
 
-        # DFS compliance (required for 5GHz with ieee80211d)
-        if hw_mode == "a" and not cfg.hotspot_mode:
-            lines.append("ieee80211h=1")
+            # DFS compliance (required for 5GHz with ieee80211d)
+            if hw_mode == "a":
+                lines.append("ieee80211h=1")
 
         lines.append("")
 
@@ -354,12 +365,19 @@ class HostapdService:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
 
-        # Bring up interface
-        out, err, rc = await HostapdService._run(f"ip link set {iface} up")
-        logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
-        if rc != 0:
-            logger.error(f"Failed to bring up {iface}: {err}")
-            return False
+        # Bring up interface — skip for hotspot mode because __ap type
+        # interfaces cannot be brought UP manually; hostapd will do it.
+        if cfg.hotspot_mode:
+            logger.info(
+                f"setup_interface: hotspot mode — skipping 'ip link set up' "
+                f"(hostapd will bring {iface} UP)"
+            )
+        else:
+            out, err, rc = await HostapdService._run(f"ip link set {iface} up")
+            logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
+            if rc != 0:
+                logger.error(f"Failed to bring up {iface}: {err}")
+                return False
 
         logger.info(f"WLAN interface {iface} configured with IP {cfg.ip}/{prefix_len}")
         return True
