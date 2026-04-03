@@ -1,3 +1,4 @@
+import asyncio
 import os
 import platform
 import subprocess
@@ -296,7 +297,7 @@ def _persist_config():
         yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
 
 
-def _configure_lan_port(lp: LANPort):
+async def _configure_lan_port(lp: LANPort):
     """Configure a single LAN port (or VLAN sub-interface) on Linux."""
     import ipaddress as _ip
     iif = lp.effective_interface
@@ -305,25 +306,25 @@ def _configure_lan_port(lp: LANPort):
 
     # Create VLAN sub-interface if needed
     if lp.vlan_id is not None:
-        subprocess.run(
-            ["ip", "link", "add", "link", lp.interface, "name", iif,
-             "type", "vlan", "id", str(lp.vlan_id)],
-            capture_output=True, timeout=5,
+        await _run_cmd(
+            f"ip link add link {lp.interface} name {iif} type vlan id {lp.vlan_id}"
         )
 
-    subprocess.run(
-        ["ip", "addr", "flush", "dev", iif],
-        capture_output=True, timeout=5,
-    )
-    subprocess.run(
-        ["ip", "addr", "add", f"{lp.ip}/{prefix_len}", "dev", iif],
-        capture_output=True, timeout=5,
-    )
-    subprocess.run(
-        ["ip", "link", "set", iif, "up"],
-        capture_output=True, timeout=5,
-    )
+    await _run_cmd(f"ip addr flush dev {iif}")
+    await _run_cmd(f"ip addr add {lp.ip}/{prefix_len} dev {iif}")
+    await _run_cmd(f"ip link set {iif} up")
     logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
+
+
+async def _run_cmd(cmd: str) -> tuple[str, str, int]:
+    """Run a shell command asynchronously (non-blocking)."""
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
 
 
 async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
@@ -341,22 +342,17 @@ async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
         return False
 
     # Remove stale virtual interface if it already exists
-    subprocess.run(["iw", "dev", ap_iface, "del"], capture_output=True, timeout=5)
+    await _run_cmd(f"iw dev {ap_iface} del 2>/dev/null")
 
     # Tell NetworkManager to leave the virtual AP alone (if NM is running).
-    # This must happen BEFORE the interface is created.
-    subprocess.run(
-        ["nmcli", "device", "set", ap_iface, "managed", "no"],
-        capture_output=True, timeout=5,
-    )
+    await _run_cmd(f"nmcli device set {ap_iface} managed no 2>/dev/null")
 
     # Create the virtual AP interface
-    result = subprocess.run(
-        ["iw", "dev", wan_iface, "interface", "add", ap_iface, "type", "__ap"],
-        capture_output=True, text=True, timeout=5,
+    out, err, rc = await _run_cmd(
+        f"iw dev {wan_iface} interface add {ap_iface} type __ap"
     )
-    if result.returncode != 0:
-        logger.error(f"Failed to create virtual AP {ap_iface}: {result.stderr}")
+    if rc != 0:
+        logger.error(f"Failed to create virtual AP {ap_iface}: {err}")
         return False
 
     # Ensure the virtual AP has a unique MAC address.  Many drivers give
@@ -366,45 +362,36 @@ async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
         parent_mac = Path(f"/sys/class/net/{wan_iface}/address").read_text().strip()
         ap_mac = Path(f"/sys/class/net/{ap_iface}/address").read_text().strip()
         if parent_mac == ap_mac:
-            # Increment the last octet to create a unique MAC
             octets = parent_mac.split(":")
             octets[-1] = format((int(octets[-1], 16) + 1) % 256, "02x")
             new_mac = ":".join(octets)
-            r = subprocess.run(
-                ["ip", "link", "set", "dev", ap_iface, "address", new_mac],
-                capture_output=True, text=True, timeout=5,
+            _, mac_err, mac_rc = await _run_cmd(
+                f"ip link set dev {ap_iface} address {new_mac}"
             )
             logger.info(
                 f"Virtual AP MAC: {ap_mac} clashed with parent {parent_mac}, "
-                f"set to {new_mac} (rc={r.returncode})"
+                f"set to {new_mac} (rc={mac_rc})"
             )
     except Exception as e:
         logger.warning(f"Could not check/set MAC for {ap_iface}: {e}")
 
     # Initialize the interface (matches create_ap sequence):
     # bring DOWN, flush, then bring UP
-    subprocess.run(["ip", "link", "set", "down", "dev", ap_iface],
-                    capture_output=True, timeout=5)
-    subprocess.run(["ip", "addr", "flush", ap_iface],
-                    capture_output=True, timeout=5)
-    r_up = subprocess.run(["ip", "link", "set", "up", "dev", ap_iface],
-                          capture_output=True, text=True, timeout=5)
-    logger.info(f"Virtual AP {ap_iface} link up: rc={r_up.returncode}, err={r_up.stderr.strip()}")
+    await _run_cmd(f"ip link set down dev {ap_iface}")
+    await _run_cmd(f"ip addr flush {ap_iface}")
+    _, up_err, up_rc = await _run_cmd(f"ip link set up dev {ap_iface}")
+    logger.info(f"Virtual AP {ap_iface} link up: rc={up_rc}, err={up_err}")
 
     # Disable power save on the radio to avoid missed beacons
-    subprocess.run(["iw", "dev", wan_iface, "set", "power_save", "off"],
-                    capture_output=True, timeout=5)
+    await _run_cmd(f"iw dev {wan_iface} set power_save off 2>/dev/null")
 
     # Verify
-    check = subprocess.run(
-        ["ip", "link", "show", ap_iface],
-        capture_output=True, text=True, timeout=5,
-    )
+    check_out, _, check_rc = await _run_cmd(f"ip link show {ap_iface}")
     logger.info(
         f"Virtual AP {ap_iface} created on {wan_iface} "
-        f"(verify: rc={check.returncode}, out={check.stdout.strip()[:200]})"
+        f"(verify: rc={check_rc}, out={check_out[:200]})"
     )
-    return check.returncode == 0
+    return check_rc == 0
 
 
 @router.post("/complete")
@@ -522,7 +509,7 @@ async def complete_setup(payload: SetupRequest):
         # 1. Configure all LAN interfaces
         for lp in settings.lan_ports:
             try:
-                _configure_lan_port(lp)
+                await _configure_lan_port(lp)
                 services_started.append(f"lan:{lp.effective_interface}")
             except Exception as e:
                 logger.error(f"Failed to configure LAN port {lp.effective_interface}: {e}")
@@ -698,7 +685,7 @@ async def add_lan_port(payload: AddLANPortRequest):
     # Configure the new interface and reload services
     if settings.setup_completed and platform.system() == "Linux":
         try:
-            _configure_lan_port(port)
+            await _configure_lan_port(port)
         except Exception as e:
             logger.error(f"Failed to configure new LAN port {effective}: {e}")
 

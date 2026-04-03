@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
                     # Re-configure the LAN port IP on the virtual AP
                     for lp in cfg.lan_ports:
                         if lp.interface == ap_iface:
-                            _configure_lan_port(lp)
+                            await _configure_lan_port(lp)
                 else:
                     logger.error(f"Hotspot: failed to recreate virtual AP {ap_iface}")
             except Exception as e:
