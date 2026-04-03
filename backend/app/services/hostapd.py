@@ -177,17 +177,76 @@ class HostapdService:
     # ── Configuration generation ─────────────────────────────────
 
     @staticmethod
+    async def _detect_station_channel(wan_iface: str) -> tuple[int, str]:
+        """Detect the channel and hw_mode the station interface is using.
+
+        Returns (channel, hw_mode).  Falls back to (0, "g") on failure.
+        """
+        out, _, rc = await HostapdService._run(f"iw dev {wan_iface} info 2>/dev/null")
+        if rc != 0:
+            logger.warning(f"_detect_station_channel: 'iw dev {wan_iface} info' failed (rc={rc})")
+            return 0, "g"
+
+        channel = 0
+        freq = 0
+        for line in out.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("channel"):
+                # e.g. "channel 6 (2437 MHz), width: 20 MHz, center1: 2437 MHz"
+                try:
+                    channel = int(stripped.split()[1])
+                except (IndexError, ValueError):
+                    pass
+            elif "center1" not in stripped and "freq:" in stripped.lower():
+                try:
+                    freq = int(stripped.split()[-1])
+                except (IndexError, ValueError):
+                    pass
+
+        # Determine hw_mode from channel/frequency
+        hw_mode = "g"  # default 2.4 GHz
+        if channel > 14 or freq > 5000:
+            hw_mode = "a"  # 5 GHz
+
+        logger.info(f"_detect_station_channel: wan={wan_iface}, channel={channel}, hw_mode={hw_mode}")
+        return channel, hw_mode
+
+    @staticmethod
     async def generate_config() -> str:
         """Generate /etc/jetlag/hostapd.conf from current WirelessConfig."""
         cfg = settings.wireless
+
+        channel = cfg.channel
+        hw_mode = cfg.hw_mode
+
+        # In hotspot mode the virtual AP MUST use the same channel as the
+        # physical station connection — a single radio cannot operate on
+        # two channels simultaneously.  Auto-detect and override.
+        if cfg.hotspot_mode and cfg.wan_interface:
+            sta_channel, sta_hw_mode = await HostapdService._detect_station_channel(
+                cfg.wan_interface
+            )
+            if sta_channel > 0:
+                logger.info(
+                    f"generate_config: hotspot mode — overriding channel "
+                    f"{channel}->{sta_channel}, hw_mode {hw_mode}->{sta_hw_mode} "
+                    f"to match station on {cfg.wan_interface}"
+                )
+                channel = sta_channel
+                hw_mode = sta_hw_mode
+            else:
+                logger.warning(
+                    f"generate_config: could not detect station channel on "
+                    f"{cfg.wan_interface}, using configured channel={channel}"
+                )
 
         lines = [
             "# JetLag hostapd configuration — auto-generated",
             f"interface={cfg.interface}",
             "driver=nl80211",
             f"ssid={cfg.ssid}",
-            f"hw_mode={cfg.hw_mode}",
-            f"channel={cfg.channel}",
+            f"hw_mode={hw_mode}",
+            f"channel={channel}",
         ]
 
         # In hotspot mode the virtual AP shares the physical radio which
@@ -223,13 +282,13 @@ class HostapdService:
             lines.append("ieee80211n=0")
 
         # 802.11ac / VHT (requires 5GHz)
-        if cfg.ieee80211ac and cfg.hw_mode == "a":
+        if cfg.ieee80211ac and hw_mode == "a":
             lines.append("ieee80211ac=1")
         else:
             lines.append("ieee80211ac=0")
 
         # DFS compliance (required for 5GHz with ieee80211d)
-        if cfg.hw_mode == "a" and not cfg.hotspot_mode:
+        if hw_mode == "a" and not cfg.hotspot_mode:
             lines.append("ieee80211h=1")
 
         lines.append("")
@@ -398,7 +457,7 @@ class HostapdService:
             logger.error(f"hostapd -dd diagnostic output:\n{diag}")
             return {
                 "success": False,
-                "error": f"hostapd failed (rc={rc}): {err[:200] or out[:200] or 'no output'}\n\nDiagnostic:\n{diag[:500]}",
+                "error": f"hostapd failed (rc={rc}): {err[:200] or out[:200] or 'no output'}\n\nDiagnostic:\n{diag[:2000]}",
             }
 
         # Verify hostapd is actually running (it may fork to bg then exit)
@@ -414,7 +473,7 @@ class HostapdService:
             logger.error(f"hostapd -dd diagnostic output:\n{diag}")
             return {
                 "success": False,
-                "error": f"hostapd daemonized but exited immediately.\n\nDiagnostic:\n{diag[:500]}",
+                "error": f"hostapd daemonized but exited immediately.\n\nDiagnostic:\n{diag[:2000]}",
             }
 
         logger.info(f"hostapd started and verified running: SSID={cfg.ssid} on {cfg.interface}")
