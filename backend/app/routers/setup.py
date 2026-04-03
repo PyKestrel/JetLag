@@ -358,13 +358,18 @@ async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
         logger.error(f"Failed to create virtual AP {ap_iface}: {result.stderr}")
         return False
 
-    # Bring the virtual interface up
-    subprocess.run(
-        ["ip", "link", "set", ap_iface, "up"],
-        capture_output=True, timeout=5,
+    # Do NOT try to bring the interface UP here — virtual __ap interfaces
+    # cannot be brought UP manually; hostapd will do it when it starts.
+    # Verify the interface was created
+    check = subprocess.run(
+        ["ip", "link", "show", ap_iface],
+        capture_output=True, text=True, timeout=5,
     )
-    logger.info(f"Virtual AP interface {ap_iface} created on {wan_iface}")
-    return True
+    logger.info(
+        f"Virtual AP interface {ap_iface} created on {wan_iface} "
+        f"(verify: rc={check.returncode}, out={check.stdout.strip()[:200]})"
+    )
+    return check.returncode == 0
 
 
 @router.post("/complete")

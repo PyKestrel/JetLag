@@ -252,17 +252,31 @@ class HostapdService:
         cfg = settings.wireless
         iface = cfg.interface
 
+        logger.info(
+            f"setup_interface: iface={iface}, hotspot_mode={cfg.hotspot_mode}, "
+            f"bridge_to_lan={cfg.bridge_to_lan}, ip={cfg.ip}, subnet={cfg.subnet}"
+        )
+
         if cfg.bridge_to_lan:
-            # Bridge mode: add to br-lan (if bridging is configured)
             logger.info(f"Bridge mode: {iface} will be managed by hostapd + bridge")
             return True
 
+        # Check interface exists before configuring
+        out, err, rc = await HostapdService._run(f"ip link show {iface}")
+        logger.info(f"setup_interface: 'ip link show {iface}' rc={rc}, out={out[:200]}, err={err[:200]}")
+        if rc != 0:
+            logger.error(f"Interface {iface} does not exist: {err}")
+            return False
+
         # Standalone mode: assign IP to WLAN interface
         # Flush existing IP and assign the configured one
-        await HostapdService._run(f"ip addr flush dev {iface}")
-        _, err, rc = await HostapdService._run(
-            f"ip addr add {cfg.ip}/{cfg.subnet.split('/')[-1]} dev {iface}"
-        )
+        out, err, rc = await HostapdService._run(f"ip addr flush dev {iface}")
+        logger.info(f"setup_interface: 'ip addr flush dev {iface}' rc={rc}, err={err}")
+
+        prefix_len = cfg.subnet.split('/')[-1]
+        ip_cmd = f"ip addr add {cfg.ip}/{prefix_len} dev {iface}"
+        out, err, rc = await HostapdService._run(ip_cmd)
+        logger.info(f"setup_interface: '{ip_cmd}' rc={rc}, out={out}, err={err}")
         if rc != 0:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
@@ -271,12 +285,15 @@ class HostapdService:
         # because the kernel doesn't allow manually bringing a __ap type
         # interface UP; hostapd itself will bring it UP when it starts.
         if not cfg.hotspot_mode:
-            _, err, rc = await HostapdService._run(f"ip link set {iface} up")
+            out, err, rc = await HostapdService._run(f"ip link set {iface} up")
+            logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
             if rc != 0:
                 logger.error(f"Failed to bring up {iface}: {err}")
                 return False
+        else:
+            logger.info(f"setup_interface: hotspot mode — skipping 'ip link set up' (hostapd will bring it UP)")
 
-        logger.info(f"WLAN interface {iface} configured with IP {cfg.ip}")
+        logger.info(f"WLAN interface {iface} configured with IP {cfg.ip}/{prefix_len}")
         return True
 
     @staticmethod
@@ -303,39 +320,80 @@ class HostapdService:
             return {"success": False, "error": "Wireless AP requires Linux"}
 
         cfg = settings.wireless
+        logger.info(
+            f"start: begin — interface={cfg.interface}, hotspot_mode={cfg.hotspot_mode}, "
+            f"enabled={cfg.enabled}, ssid={cfg.ssid}, channel={cfg.channel}"
+        )
 
         # Check interface exists
         interfaces = await HostapdService.detect_wlan_interfaces()
         iface_names = [i["interface"] for i in interfaces]
+        logger.info(f"start: detected WLAN interfaces: {iface_names}")
         if cfg.interface not in iface_names:
+            logger.error(f"start: target interface '{cfg.interface}' not in {iface_names}")
             return {
                 "success": False,
                 "error": f"Interface '{cfg.interface}' not found. Available: {iface_names}",
             }
 
         # Generate config
-        await HostapdService.generate_config()
+        config_content = await HostapdService.generate_config()
+        logger.info(f"start: hostapd.conf generated ({len(config_content)} bytes)")
 
-        # Always configure the interface IP and bring it UP — even in hotspot
-        # mode, because stop()/teardown flushes the IP and the interface may
-        # be DOWN after a restart cycle.
+        # Configure the interface IP (and bring UP for non-hotspot)
         ok = await HostapdService.setup_interface()
         if not ok:
+            logger.error("start: setup_interface() returned False — aborting")
             return {"success": False, "error": "Failed to configure WLAN interface"}
+        logger.info("start: setup_interface() succeeded")
 
         # Stop existing hostapd if running
-        await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
+        out, err, rc = await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
+        logger.info(f"start: pkill hostapd rc={rc}")
         await asyncio.sleep(0.5)
 
-        # Start hostapd in background
-        _, err, rc = await HostapdService._run(
-            f"hostapd -B -P {HOSTAPD_PID_FILE} {HOSTAPD_CONF_PATH}"
-        )
-        if rc != 0:
-            logger.error(f"hostapd failed to start: {err}")
-            return {"success": False, "error": f"hostapd failed: {err}"}
+        # Dump the config file content for debugging
+        try:
+            conf_on_disk = Path(HOSTAPD_CONF_PATH).read_text()
+            logger.info(f"start: hostapd.conf on disk:\n{conf_on_disk}")
+        except Exception as e:
+            logger.error(f"start: could not read {HOSTAPD_CONF_PATH}: {e}")
 
-        logger.info(f"hostapd started: SSID={cfg.ssid} on {cfg.interface}")
+        # Start hostapd in background
+        hostapd_cmd = f"hostapd -B -P {HOSTAPD_PID_FILE} {HOSTAPD_CONF_PATH}"
+        logger.info(f"start: running '{hostapd_cmd}'")
+        out, err, rc = await HostapdService._run(hostapd_cmd)
+        logger.info(f"start: hostapd rc={rc}, stdout={out[:500]}, stderr={err[:500]}")
+        if rc != 0:
+            # Run with -dd in foreground to capture detailed error output
+            logger.error(f"hostapd -B failed (rc={rc}), running -dd diagnostic...")
+            # timeout the foreground run after 5s so we don't hang
+            hostapd_debug_cmd = f"timeout 5 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
+            debug_out, debug_err, debug_rc = await HostapdService._run(hostapd_debug_cmd)
+            diag = (debug_out + "\n" + debug_err).strip()
+            logger.error(f"hostapd -dd diagnostic output:\n{diag}")
+            return {
+                "success": False,
+                "error": f"hostapd failed (rc={rc}): {err[:200] or out[:200] or 'no output'}\n\nDiagnostic:\n{diag[:500]}",
+            }
+
+        # Verify hostapd is actually running (it may fork to bg then exit)
+        await asyncio.sleep(1)
+        verify_out, _, verify_rc = await HostapdService._run(
+            "pgrep -f 'hostapd.*jetlag' 2>/dev/null"
+        )
+        if verify_rc != 0:
+            logger.error("start: hostapd exited immediately after daemonizing — running diagnostic")
+            hostapd_debug_cmd = f"timeout 5 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
+            debug_out, debug_err, debug_rc = await HostapdService._run(hostapd_debug_cmd)
+            diag = (debug_out + "\n" + debug_err).strip()
+            logger.error(f"hostapd -dd diagnostic output:\n{diag}")
+            return {
+                "success": False,
+                "error": f"hostapd daemonized but exited immediately.\n\nDiagnostic:\n{diag[:500]}",
+            }
+
+        logger.info(f"hostapd started and verified running: SSID={cfg.ssid} on {cfg.interface}")
 
         # In hotspot mode, the virtual AP is registered as a LAN port,
         # so dnsmasq + firewall already cover it — skip integration.
@@ -360,13 +418,18 @@ class HostapdService:
         if not _IS_LINUX:
             return {"success": False, "error": "Not on Linux"}
 
+        cfg = settings.wireless
+        logger.info(f"stop: begin — interface={cfg.interface}, hotspot_mode={cfg.hotspot_mode}")
+
         # Kill hostapd
         pid_path = Path(HOSTAPD_PID_FILE)
         if pid_path.exists():
             pid = pid_path.read_text().strip()
+            logger.info(f"stop: killing hostapd pid={pid}")
             await HostapdService._run(f"kill {pid} 2>/dev/null")
             pid_path.unlink(missing_ok=True)
         else:
+            logger.info("stop: no PID file, using pkill")
             await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
 
         await asyncio.sleep(0.5)
@@ -374,14 +437,44 @@ class HostapdService:
         # Tear down interface
         await HostapdService.teardown_interface()
 
+        # Log interface state after teardown
+        out, err, rc = await HostapdService._run(f"ip link show {cfg.interface} 2>/dev/null")
+        logger.info(f"stop: after teardown 'ip link show {cfg.interface}' rc={rc}, out={out[:300]}")
+
+        # Check if iw still sees the interface
+        out2, _, rc2 = await HostapdService._run("iw dev 2>/dev/null")
+        logger.info(f"stop: 'iw dev' after stop: {out2[:500]}")
+
         logger.info("hostapd stopped")
         return {"success": True}
 
     @staticmethod
     async def restart() -> dict:
         """Stop then start hostapd."""
-        await HostapdService.stop()
-        return await HostapdService.start()
+        cfg = settings.wireless
+        logger.info(f"restart: begin — interface={cfg.interface}, hotspot_mode={cfg.hotspot_mode}")
+        stop_result = await HostapdService.stop()
+        logger.info(f"restart: stop completed, result={stop_result}")
+
+        # In hotspot mode, check if the virtual AP interface survived the stop.
+        # Some drivers/kernels remove the __ap interface when hostapd exits.
+        if cfg.hotspot_mode:
+            out, err, rc = await HostapdService._run(f"ip link show {cfg.interface} 2>/dev/null")
+            if rc != 0:
+                logger.warning(
+                    f"restart: virtual AP {cfg.interface} disappeared after stop — "
+                    f"recreating from {cfg.wan_interface}"
+                )
+                from app.routers.setup import _create_virtual_ap
+                ok = await _create_virtual_ap(cfg.wan_interface, cfg.interface)
+                if not ok:
+                    logger.error(f"restart: failed to recreate virtual AP {cfg.interface}")
+                    return {"success": False, "error": f"Failed to recreate virtual AP {cfg.interface}"}
+                logger.info(f"restart: virtual AP {cfg.interface} recreated successfully")
+
+        start_result = await HostapdService.start()
+        logger.info(f"restart: start completed, result={start_result}")
+        return start_result
 
     @staticmethod
     async def status() -> dict:
