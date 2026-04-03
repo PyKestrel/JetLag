@@ -247,6 +247,9 @@ class HostapdService:
             f"ssid={cfg.ssid}",
             f"hw_mode={hw_mode}",
             f"channel={channel}",
+            "beacon_int=100",
+            "ctrl_interface=/var/run/jetlag-hostapd",
+            "ctrl_interface_group=0",
         ]
 
         if cfg.hotspot_mode:
@@ -365,17 +368,15 @@ class HostapdService:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
 
-        # Bring up interface — skip for hotspot mode because __ap type
-        # interfaces cannot be brought UP manually; hostapd will do it.
-        if cfg.hotspot_mode:
-            logger.info(
-                f"setup_interface: hotspot mode — skipping 'ip link set up' "
-                f"(hostapd will bring {iface} UP)"
-            )
-        else:
-            out, err, rc = await HostapdService._run(f"ip link set {iface} up")
-            logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
-            if rc != 0:
+        # Bring up interface.  In hotspot mode the interface should already
+        # be UP from _create_virtual_ap(), but bring it up anyway to be safe.
+        out, err, rc = await HostapdService._run(f"ip link set {iface} up")
+        logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
+        if rc != 0:
+            # Non-fatal in hotspot mode — hostapd will manage it
+            if cfg.hotspot_mode:
+                logger.warning(f"Could not bring up {iface} (hotspot), hostapd will manage: {err}")
+            else:
                 logger.error(f"Failed to bring up {iface}: {err}")
                 return False
 
@@ -459,6 +460,15 @@ class HostapdService:
         out, err, rc = await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
         logger.info(f"start: pkill hostapd rc={rc}")
         await asyncio.sleep(0.5)
+
+        # Ensure NM leaves the interface alone and power save is off
+        if cfg.hotspot_mode:
+            await HostapdService._run(
+                f"nmcli device set {cfg.interface} managed no 2>/dev/null"
+            )
+            await HostapdService._run(
+                f"iw dev {cfg.interface} set power_save off 2>/dev/null"
+            )
 
         # Dump the config file content for debugging
         try:

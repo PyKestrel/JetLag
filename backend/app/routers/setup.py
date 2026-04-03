@@ -319,39 +319,38 @@ def _configure_lan_port(lp: LANPort):
         ["ip", "addr", "add", f"{lp.ip}/{prefix_len}", "dev", iif],
         capture_output=True, timeout=5,
     )
-    # Skip 'ip link set up' for virtual AP in hotspot mode — __ap type
-    # interfaces cannot be brought UP manually; hostapd will do it.
-    is_hotspot_ap = (
-        settings.wireless.enabled
-        and settings.wireless.hotspot_mode
-        and iif == (settings.wireless.virtual_interface or "ap0")
+    subprocess.run(
+        ["ip", "link", "set", iif, "up"],
+        capture_output=True, timeout=5,
     )
-    if not is_hotspot_ap:
-        subprocess.run(
-            ["ip", "link", "set", iif, "up"],
-            capture_output=True, timeout=5,
-        )
-    logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len} (skip_up={is_hotspot_ap})")
+    logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
 
 
 async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
     """Create a virtual AP interface on the same phy as *wan_iface*.
 
-    Uses ``iw dev <wan_iface> interface add <ap_iface> type __ap``.
-    hostapd will bring the interface UP and manage it.
+    Follows the same approach as linux-wifi-hotspot/create_ap:
+      1. Tell NetworkManager to ignore the new interface
+      2. Create with ``iw dev <wan> interface add <ap> type __ap``
+      3. Assign a unique MAC if it clashes with the parent
+      4. Bring the interface DOWN then UP
+      5. Disable power-save on the parent radio
     Returns True on success.
     """
     if platform.system() != "Linux":
         return False
 
     # Remove stale virtual interface if it already exists
+    subprocess.run(["iw", "dev", ap_iface, "del"], capture_output=True, timeout=5)
+
+    # Tell NetworkManager to leave the virtual AP alone (if NM is running).
+    # This must happen BEFORE the interface is created.
     subprocess.run(
-        ["iw", "dev", ap_iface, "del"],
+        ["nmcli", "device", "set", ap_iface, "managed", "no"],
         capture_output=True, timeout=5,
     )
 
-    # Use 'type __ap' for concurrent station+AP on the same radio.
-    # hostapd will bring the interface UP and manage it.
+    # Create the virtual AP interface
     result = subprocess.run(
         ["iw", "dev", wan_iface, "interface", "add", ap_iface, "type", "__ap"],
         capture_output=True, text=True, timeout=5,
@@ -360,16 +359,49 @@ async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
         logger.error(f"Failed to create virtual AP {ap_iface}: {result.stderr}")
         return False
 
-    # Do NOT bring __ap interfaces UP — the kernel won't allow it;
-    # hostapd will bring it UP when it starts.
+    # Ensure the virtual AP has a unique MAC address.  Many drivers give
+    # the new interface the same MAC as the parent — two interfaces on the
+    # same phy with identical MACs will cause hostapd to fail.
+    try:
+        parent_mac = Path(f"/sys/class/net/{wan_iface}/address").read_text().strip()
+        ap_mac = Path(f"/sys/class/net/{ap_iface}/address").read_text().strip()
+        if parent_mac == ap_mac:
+            # Increment the last octet to create a unique MAC
+            octets = parent_mac.split(":")
+            octets[-1] = format((int(octets[-1], 16) + 1) % 256, "02x")
+            new_mac = ":".join(octets)
+            r = subprocess.run(
+                ["ip", "link", "set", "dev", ap_iface, "address", new_mac],
+                capture_output=True, text=True, timeout=5,
+            )
+            logger.info(
+                f"Virtual AP MAC: {ap_mac} clashed with parent {parent_mac}, "
+                f"set to {new_mac} (rc={r.returncode})"
+            )
+    except Exception as e:
+        logger.warning(f"Could not check/set MAC for {ap_iface}: {e}")
 
-    # Verify the interface was created
+    # Initialize the interface (matches create_ap sequence):
+    # bring DOWN, flush, then bring UP
+    subprocess.run(["ip", "link", "set", "down", "dev", ap_iface],
+                    capture_output=True, timeout=5)
+    subprocess.run(["ip", "addr", "flush", ap_iface],
+                    capture_output=True, timeout=5)
+    r_up = subprocess.run(["ip", "link", "set", "up", "dev", ap_iface],
+                          capture_output=True, text=True, timeout=5)
+    logger.info(f"Virtual AP {ap_iface} link up: rc={r_up.returncode}, err={r_up.stderr.strip()}")
+
+    # Disable power save on the radio to avoid missed beacons
+    subprocess.run(["iw", "dev", wan_iface, "set", "power_save", "off"],
+                    capture_output=True, timeout=5)
+
+    # Verify
     check = subprocess.run(
         ["ip", "link", "show", ap_iface],
         capture_output=True, text=True, timeout=5,
     )
     logger.info(
-        f"Virtual AP interface {ap_iface} created on {wan_iface} "
+        f"Virtual AP {ap_iface} created on {wan_iface} "
         f"(verify: rc={check.returncode}, out={check.stdout.strip()[:200]})"
     )
     return check.returncode == 0
