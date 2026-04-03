@@ -19,11 +19,30 @@ from app.version import __version__, get_version_info
 
 
 def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        handlers=[logging.StreamHandler()],
-    )
+    from logging.handlers import RotatingFileHandler
+
+    fmt = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
+    # Try /var/log/jetlag first, fall back to ./logs
+    for log_dir in (Path("/var/log/jetlag"), Path(__file__).resolve().parent.parent / "logs"):
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "jetlag.log"
+            # Test we can write
+            log_file.touch(exist_ok=True)
+            break
+        except OSError:
+            log_file = None
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        file_handler = RotatingFileHandler(
+            log_file, maxBytes=5 * 1024 * 1024, backupCount=3,
+        )
+        file_handler.setFormatter(logging.Formatter(fmt))
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
 
 
 @asynccontextmanager
