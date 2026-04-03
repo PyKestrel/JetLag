@@ -519,6 +519,8 @@ export interface NetworkInterface {
   state: string;
   ipv4_addresses: string[];
   has_link: boolean;
+  is_wlan: boolean;
+  supports_ap: boolean;
 }
 
 export interface SetupRequest {
@@ -531,6 +533,11 @@ export interface SetupRequest {
   dhcp_range_end?: string;
   dhcp_lease_time?: string;
   dns_upstream?: string[];
+  hotspot_mode?: boolean;
+  hotspot_ssid?: string;
+  hotspot_password?: string;
+  hotspot_channel?: number;
+  hotspot_hidden?: boolean;
 }
 
 export interface SetupCompleteResponse {
@@ -539,7 +546,9 @@ export interface SetupCompleteResponse {
   network: SettingsNetwork;
   dhcp: SettingsDHCP;
   dns: SettingsDNS;
-  services_note: string;
+  services_started?: string[];
+  services_failed?: string[];
+  hotspot_mode?: boolean;
 }
 
 export interface SettingsData {

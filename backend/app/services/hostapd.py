@@ -312,10 +312,12 @@ class HostapdService:
         # Generate config
         await HostapdService.generate_config()
 
-        # Setup interface
-        ok = await HostapdService.setup_interface()
-        if not ok:
-            return {"success": False, "error": "Failed to configure WLAN interface"}
+        # In hotspot mode the virtual AP interface IP is already configured
+        # by _configure_lan_port during setup, so skip setup_interface.
+        if not cfg.hotspot_mode:
+            ok = await HostapdService.setup_interface()
+            if not ok:
+                return {"success": False, "error": "Failed to configure WLAN interface"}
 
         # Stop existing hostapd if running
         await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
@@ -331,17 +333,20 @@ class HostapdService:
 
         logger.info(f"hostapd started: SSID={cfg.ssid} on {cfg.interface}")
 
-        # Integrate into dnsmasq (add WLAN DHCP scope)
-        try:
-            await HostapdService._integrate_dnsmasq()
-        except Exception as e:
-            logger.error(f"Failed to integrate WLAN into dnsmasq: {e}")
+        # In hotspot mode, the virtual AP is registered as a LAN port,
+        # so dnsmasq + firewall already cover it — skip integration.
+        if not cfg.hotspot_mode:
+            # Integrate into dnsmasq (add WLAN DHCP scope)
+            try:
+                await HostapdService._integrate_dnsmasq()
+            except Exception as e:
+                logger.error(f"Failed to integrate WLAN into dnsmasq: {e}")
 
-        # Integrate into nftables (add WLAN rules)
-        try:
-            await HostapdService._integrate_firewall()
-        except Exception as e:
-            logger.error(f"Failed to integrate WLAN into firewall: {e}")
+            # Integrate into nftables (add WLAN rules)
+            try:
+                await HostapdService._integrate_firewall()
+            except Exception as e:
+                logger.error(f"Failed to integrate WLAN into firewall: {e}")
 
         return {"success": True, "ssid": cfg.ssid, "interface": cfg.interface}
 

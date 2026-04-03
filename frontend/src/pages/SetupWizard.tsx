@@ -9,6 +9,8 @@ import {
   Loader2,
   Server,
   ExternalLink,
+  Wifi,
+  Radio,
 } from 'lucide-react'
 import {
   getSetupInterfaces,
@@ -46,6 +48,13 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [dnsSpoofing, setDnsSpoofing] = useState(true)
   const [firewallEnabled, setFirewallEnabled] = useState(true)
 
+  // Hotspot mode state
+  const [hotspotMode, setHotspotMode] = useState(false)
+  const [hotspotSsid, setHotspotSsid] = useState('JetLag-WiFi')
+  const [hotspotPassword, setHotspotPassword] = useState('JetLag1234')
+  const [hotspotChannel, setHotspotChannel] = useState(6)
+  const [hotspotHidden, setHotspotHidden] = useState(false)
+
   // Deploy state
   const [deploying, setDeploying] = useState(false)
   const [deployError, setDeployError] = useState<string | null>(null)
@@ -69,18 +78,31 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           setLanIface(withoutIp.name)
         }
       }
+      // Auto-detect single-WLAN scenario: only one non-lo iface that is WLAN + AP-capable
+      const wlanAp = data.interfaces.filter((i: NetworkInterface) => i.is_wlan && i.supports_ap)
+      const nonWlan = data.interfaces.filter((i: NetworkInterface) => !i.is_wlan)
+      if (wlanAp.length >= 1 && nonWlan.length === 0) {
+        // Only WLAN cards available — auto-suggest hotspot mode
+        setWanIface(wlanAp[0].name)
+        setHotspotMode(true)
+        setLanIface('')
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to detect interfaces')
     }
     setLoadingIfaces(false)
   }
 
+  // Derived: selected WAN interface object
+  const selectedWan = interfaces.find((i: NetworkInterface) => i.name === wanIface)
+  const wanIsApCapable = selectedWan?.is_wlan && selectedWan?.supports_ap
+
   const handleDeploy = async () => {
     setDeploying(true)
     setDeployError(null)
     const payload: SetupRequest = {
       wan_interface: wanIface,
-      lan_interface: lanIface,
+      lan_interface: hotspotMode ? 'ap0' : lanIface,
       lan_ip: lanIp,
       lan_subnet: lanSubnet,
       dhcp_enabled: dhcpEnabled,
@@ -88,6 +110,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
       dhcp_range_end: dhcpEnd,
       dhcp_lease_time: dhcpLease,
       dns_upstream: dnsUpstream.split(',').map((s: string) => s.trim()).filter(Boolean),
+      hotspot_mode: hotspotMode,
+      hotspot_ssid: hotspotSsid,
+      hotspot_password: hotspotPassword,
+      hotspot_channel: hotspotChannel,
+      hotspot_hidden: hotspotHidden,
     }
     try {
       await completeSetup(payload)
@@ -101,7 +128,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
 
   const stepIdx = STEPS.findIndex((s) => s.id === currentStep)
   const canGoNext = (): boolean => {
-    if (currentStep === 'interfaces') return !!(wanIface && lanIface && wanIface !== lanIface)
+    if (currentStep === 'interfaces') {
+      if (hotspotMode) return !!(wanIface && hotspotSsid && hotspotPassword.length >= 8)
+      return !!(wanIface && lanIface && wanIface !== lanIface)
+    }
     if (currentStep === 'lan') return !!(lanIp && lanSubnet)
     if (currentStep === 'services') return true
     return false
@@ -204,7 +234,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {interfaces.map((iface: NetworkInterface) => {
                       const selected = wanIface === iface.name
-                      const disabled = iface.name === lanIface
+                      const disabled = !hotspotMode && iface.name === lanIface
                       return (
                         <button
                           key={`wan-${iface.name}`}
@@ -222,7 +252,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                             <div className={`w-9 h-9 rounded-lg flex items-center justify-center mt-0.5 ${
                               selected ? 'bg-primary/10' : 'bg-muted'
                             }`}>
-                              <Globe className={`h-4.5 w-4.5 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                              {iface.is_wlan
+                                ? <Wifi className={`h-4.5 w-4.5 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                                : <Globe className={`h-4.5 w-4.5 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                              }
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
@@ -238,6 +271,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                                 {iface.ipv4_addresses.length > 0 ? iface.ipv4_addresses.join(', ') : 'No IP address assigned'}
                               </p>
                               <p className="text-[11px] text-muted-foreground mt-0.5 font-mono">{iface.mac}</p>
+                              {iface.is_wlan && iface.supports_ap && (
+                                <span className="inline-block mt-1 text-[10px] font-medium text-violet-700 bg-violet-50 border border-violet-200 rounded px-1.5 py-px">AP capable</span>
+                              )}
+                              {iface.is_wlan && !iface.supports_ap && (
+                                <span className="inline-block mt-1 text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-px">WiFi (no AP)</span>
+                              )}
                             </div>
                           </div>
                           {selected && (
@@ -251,64 +290,153 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   </div>
                 </div>
 
-                {/* LAN */}
-                <div className="mb-6">
-                  <label className="text-[13px] font-medium text-foreground mb-3 block">
-                    LAN interface <span className="text-muted-foreground font-normal">— client-facing network</span>
-                  </label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {interfaces.map((iface: NetworkInterface) => {
-                      const selected = lanIface === iface.name
-                      const disabled = iface.name === wanIface
-                      return (
+                {/* Hotspot mode toggle — shown when WAN is a WLAN card with AP support */}
+                {wanIsApCapable && (
+                  <div className="mb-8">
+                    <div className={`rounded-lg border p-5 transition-all ${hotspotMode ? 'border-violet-500 ring-1 ring-violet-500 bg-violet-500/[0.03]' : 'border-border'}`}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3">
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${hotspotMode ? 'bg-violet-500/10' : 'bg-muted'}`}>
+                            <Radio className={`h-4.5 w-4.5 ${hotspotMode ? 'text-violet-600' : 'text-muted-foreground'}`} />
+                          </div>
+                          <div>
+                            <h3 className="text-[14px] font-semibold text-foreground">Hotspot mode</h3>
+                            <p className="text-[12px] text-muted-foreground mt-0.5">
+                              Your WAN interface (<span className="font-mono font-medium text-foreground">{wanIface}</span>) is
+                              a wireless card that supports AP mode. Enable hotspot mode to create a virtual access point on the
+                              same card — no second physical interface needed.
+                            </p>
+                          </div>
+                        </div>
                         <button
-                          key={`lan-${iface.name}`}
-                          onClick={() => { setLanIface(iface.name); if (wanIface === iface.name) setWanIface('') }}
-                          disabled={disabled}
-                          className={`text-left p-4 rounded-lg border transition-all ${
-                            selected
-                              ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-500/[0.03]'
-                              : disabled
-                              ? 'border-border opacity-40 cursor-not-allowed'
-                              : 'border-border hover:border-emerald-400/60'
-                          }`}
+                          onClick={() => { setHotspotMode(!hotspotMode); if (!hotspotMode) setLanIface('') }}
+                          className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1 ${hotspotMode ? 'bg-violet-500' : 'bg-gray-300'}`}
                         >
-                          <div className="flex items-start gap-3">
-                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center mt-0.5 ${
-                              selected ? 'bg-emerald-500/10' : 'bg-muted'
-                            }`}>
-                              <Server className={`h-4.5 w-4.5 ${selected ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${hotspotMode ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+
+                      {hotspotMode && (
+                        <div className="mt-4 pt-4 border-t border-violet-500/20 space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-[12px] font-medium text-muted-foreground mb-1.5 block">SSID (network name)</label>
+                              <input
+                                type="text" value={hotspotSsid} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHotspotSsid(e.target.value)}
+                                className="w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
+                              />
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-[14px] font-semibold text-foreground">{iface.name}</span>
-                                {iface.has_link && (
-                                  <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-px">UP</span>
-                                )}
-                                {!iface.has_link && (
-                                  <span className="text-[10px] font-medium text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-px">DOWN</span>
-                                )}
-                              </div>
-                              <p className="text-[12px] text-muted-foreground mt-0.5">
-                                {iface.ipv4_addresses.length > 0 ? iface.ipv4_addresses.join(', ') : 'No IP address assigned'}
-                              </p>
-                              <p className="text-[11px] text-muted-foreground mt-0.5 font-mono">{iface.mac}</p>
+                            <div>
+                              <label className="text-[12px] font-medium text-muted-foreground mb-1.5 block">Password (min 8 chars)</label>
+                              <input
+                                type="text" value={hotspotPassword} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHotspotPassword(e.target.value)}
+                                className="w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
+                              />
                             </div>
                           </div>
-                          {selected && (
-                            <div className="mt-3 pt-3 border-t border-emerald-500/20">
-                              <span className="text-[12px] text-emerald-600 font-medium">Selected as LAN</span>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-[12px] font-medium text-muted-foreground mb-1.5 block">Channel</label>
+                              <select
+                                value={hotspotChannel} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setHotspotChannel(Number(e.target.value))}
+                                className="w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
+                              >
+                                {[1,2,3,4,5,6,7,8,9,10,11].map((ch) => (
+                                  <option key={ch} value={ch}>Channel {ch} (2.4 GHz)</option>
+                                ))}
+                              </select>
                             </div>
-                          )}
-                        </button>
-                      )
-                    })}
+                            <div className="flex items-end">
+                              <label className="flex items-center gap-2 text-[13px] text-foreground cursor-pointer">
+                                <input
+                                  type="checkbox" checked={hotspotHidden} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHotspotHidden(e.target.checked)}
+                                  className="rounded border-input"
+                                />
+                                Hidden SSID
+                              </label>
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-violet-200 bg-violet-50 p-3">
+                            <div className="flex gap-2">
+                              <Wifi className="h-4 w-4 text-violet-600 mt-0.5 flex-shrink-0" />
+                              <p className="text-[12px] text-violet-800">
+                                A virtual interface <span className="font-mono font-medium">ap0</span> will be created on the
+                                same radio as <span className="font-mono font-medium">{wanIface}</span>. Your internet connection
+                                stays active while clients connect to the hotspot.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* LAN — hidden when hotspot mode is active */}
+                {!hotspotMode && (
+                  <div className="mb-6">
+                    <label className="text-[13px] font-medium text-foreground mb-3 block">
+                      LAN interface <span className="text-muted-foreground font-normal">— client-facing network</span>
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {interfaces.map((iface: NetworkInterface) => {
+                        const selected = lanIface === iface.name
+                        const disabled = iface.name === wanIface
+                        return (
+                          <button
+                            key={`lan-${iface.name}`}
+                            onClick={() => { setLanIface(iface.name); if (wanIface === iface.name) setWanIface('') }}
+                            disabled={disabled}
+                            className={`text-left p-4 rounded-lg border transition-all ${
+                              selected
+                                ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-500/[0.03]'
+                                : disabled
+                                ? 'border-border opacity-40 cursor-not-allowed'
+                                : 'border-border hover:border-emerald-400/60'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className={`w-9 h-9 rounded-lg flex items-center justify-center mt-0.5 ${
+                                selected ? 'bg-emerald-500/10' : 'bg-muted'
+                              }`}>
+                                <Server className={`h-4.5 w-4.5 ${selected ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[14px] font-semibold text-foreground">{iface.name}</span>
+                                  {iface.has_link && (
+                                    <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-px">UP</span>
+                                  )}
+                                  {!iface.has_link && (
+                                    <span className="text-[10px] font-medium text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-px">DOWN</span>
+                                  )}
+                                </div>
+                                <p className="text-[12px] text-muted-foreground mt-0.5">
+                                  {iface.ipv4_addresses.length > 0 ? iface.ipv4_addresses.join(', ') : 'No IP address assigned'}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5 font-mono">{iface.mac}</p>
+                              </div>
+                            </div>
+                            {selected && (
+                              <div className="mt-3 pt-3 border-t border-emerald-500/20">
+                                <span className="text-[12px] text-emerald-600 font-medium">Selected as LAN</span>
+                              </div>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <p className="text-[12px] text-muted-foreground">
-                  <strong>Note:</strong> The WAN interface will retain its existing IP configuration. The LAN interface will be
-                  configured with a static IP in the next step.
+                  {hotspotMode ? (
+                    <><strong>Hotspot mode:</strong> A virtual AP interface (ap0) will be created on the same radio as your WAN connection.
+                    Clients will connect to the hotspot SSID and receive an IP from the DHCP server configured in the next step.</>
+                  ) : (
+                    <><strong>Note:</strong> The WAN interface will retain its existing IP configuration. The LAN interface will be
+                    configured with a static IP in the next step.</>
+                  )}
                 </p>
               </>
             )}
@@ -518,8 +646,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      <tr><td className="px-5 py-2.5 text-muted-foreground">WAN interface</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{wanIface}</td></tr>
-                      <tr><td className="px-5 py-2.5 text-muted-foreground">LAN interface</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{lanIface}</td></tr>
+                      <tr><td className="px-5 py-2.5 text-muted-foreground">WAN interface</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{wanIface}{selectedWan?.is_wlan ? ' (WiFi)' : ''}</td></tr>
+                      <tr><td className="px-5 py-2.5 text-muted-foreground">LAN interface</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{hotspotMode ? 'ap0 (virtual hotspot)' : lanIface}</td></tr>
+                      {hotspotMode && (
+                        <>
+                          <tr><td className="px-5 py-2.5 text-muted-foreground">Hotspot SSID</td><td className="px-5 py-2.5 font-medium text-foreground">{hotspotSsid}</td></tr>
+                          <tr><td className="px-5 py-2.5 text-muted-foreground">Hotspot channel</td><td className="px-5 py-2.5 font-medium text-foreground">{hotspotChannel}</td></tr>
+                        </>
+                      )}
                       <tr><td className="px-5 py-2.5 text-muted-foreground">LAN IP</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{lanIp}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">Subnet</td><td className="px-5 py-2.5 font-mono font-medium text-foreground">{lanSubnet}</td></tr>
                       <tr><td className="px-5 py-2.5 text-muted-foreground">DHCP</td><td className="px-5 py-2.5 font-medium text-foreground">{dhcpEnabled ? `${dhcpStart} – ${dhcpEnd} (${dhcpLease})` : 'Disabled'}</td></tr>

@@ -121,8 +121,21 @@ class UpdatesConfig(BaseModel):
 
 
 class WirelessConfig(BaseModel):
-    """Configuration for the optional WLAN access point (hostapd)."""
+    """Configuration for the optional WLAN access point (hostapd).
+
+    When hotspot_mode is True the appliance runs in single-WLAN-card mode:
+    the physical WLAN card stays connected to the internet (WAN) while a
+    virtual AP interface (e.g. ap0) is created on the same radio to act as
+    the LAN side.  The virtual interface is registered as a LAN port and
+    hostapd is started on it automatically.
+    """
     enabled: bool = False
+    hotspot_mode: bool = False
+    # Physical WLAN interface used as WAN (station) when hotspot_mode is True
+    wan_interface: str = ""
+    # Virtual AP interface name created by iw (e.g. "ap0")
+    virtual_interface: str = "ap0"
+    # Interface that hostapd binds to — physical iface normally, virtual in hotspot mode
     interface: str = "wlan0"
     ssid: str = "JetLag-WiFi"
     channel: int = 6

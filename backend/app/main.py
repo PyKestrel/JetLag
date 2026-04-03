@@ -49,6 +49,24 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to clean up orphaned VLANs: {e}")
 
+        # Hotspot mode: recreate virtual AP interface (doesn't survive reboot)
+        if cfg.wireless.enabled and cfg.wireless.hotspot_mode:
+            try:
+                from app.routers.setup import _create_virtual_ap, _configure_lan_port
+                wan_iface = cfg.wireless.wan_interface
+                ap_iface = cfg.wireless.virtual_interface or "ap0"
+                ok = await _create_virtual_ap(wan_iface, ap_iface)
+                if ok:
+                    logger.info(f"Hotspot: virtual AP {ap_iface} recreated on {wan_iface}")
+                    # Re-configure the LAN port IP on the virtual AP
+                    for lp in cfg.lan_ports:
+                        if lp.interface == ap_iface:
+                            _configure_lan_port(lp)
+                else:
+                    logger.error(f"Hotspot: failed to recreate virtual AP {ap_iface}")
+            except Exception as e:
+                logger.error(f"Failed to recreate virtual AP on startup: {e}")
+
         # Initialize tc/netem root qdisc
         try:
             await ImpairmentService.initialize()
@@ -82,7 +100,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to enable IP forwarding: {e}")
 
-        # Start wireless AP if enabled
+        # Start wireless AP if enabled (hotspot mode or standalone)
         if cfg.wireless.enabled:
             try:
                 from app.services.hostapd import HostapdService

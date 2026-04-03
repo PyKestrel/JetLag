@@ -60,9 +60,11 @@ class DnsmasqService:
                 lines.append(f"dhcp-option=tag:{tag},option:router,{lp.dhcp.gateway}")
                 lines.append(f"dhcp-option=tag:{tag},option:dns-server,{lp.dhcp.dns_server}")
 
-        # Wireless AP — add WLAN DHCP scope if enabled and not bridged
+        # Wireless AP — add WLAN DHCP scope if enabled and not bridged.
+        # In hotspot_mode the virtual AP is already a LAN port, so skip to
+        # avoid duplicate interface/dhcp-range entries.
         wcfg = cfg.wireless
-        if wcfg.enabled and not wcfg.bridge_to_lan:
+        if wcfg.enabled and not wcfg.bridge_to_lan and not wcfg.hotspot_mode:
             wlan_iface = wcfg.interface
             wlan_tag = f"wlan_{wlan_iface.replace('.', '_')}"
             lines.append("")
