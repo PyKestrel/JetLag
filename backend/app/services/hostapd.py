@@ -254,9 +254,8 @@ class HostapdService:
 
         if cfg.hotspot_mode:
             # Hotspot mode: minimal config for concurrent station+AP.
-            # - No country_code (radio inherits from station connection)
-            # - noscan=1 prevents AP from triggering scans that disrupt station
-            lines.append("noscan=1")
+            # No country_code — radio inherits from station connection.
+            pass
         else:
             # Standalone AP mode: full regulatory config
             lines.append(f"country_code={cfg.country_code}")
