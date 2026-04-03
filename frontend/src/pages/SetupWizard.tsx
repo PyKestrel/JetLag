@@ -59,6 +59,18 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [deploying, setDeploying] = useState(false)
   const [deployError, setDeployError] = useState<string | null>(null)
   const [deployDone, setDeployDone] = useState(false)
+  const [countdown, setCountdown] = useState(5)
+
+  // Countdown redirect after successful deploy
+  useEffect(() => {
+    if (!deployDone) return
+    if (countdown <= 0) {
+      window.location.href = '/'
+      return
+    }
+    const timer = setTimeout(() => setCountdown((c: number) => c - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [deployDone, countdown])
 
   useEffect(() => {
     loadInterfaces()
@@ -119,7 +131,6 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     try {
       await completeSetup(payload)
       setDeployDone(true)
-      setTimeout(() => onComplete(), 2000)
     } catch (err: unknown) {
       setDeployError(err instanceof Error ? err.message : 'Deployment failed')
       setDeploying(false)
@@ -702,7 +713,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 </div>
                 <h2 className="text-[16px] font-semibold text-foreground mb-1">Configuration deployed!</h2>
                 <p className="text-[13px] text-muted-foreground">
-                  Redirecting to the dashboard...
+                  Redirecting to the dashboard in {countdown}s...
                 </p>
               </div>
             )}
