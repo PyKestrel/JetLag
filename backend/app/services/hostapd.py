@@ -354,17 +354,12 @@ class HostapdService:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
 
-        # Bring up interface — skip for virtual AP interfaces (hotspot mode)
-        # because the kernel doesn't allow manually bringing a __ap type
-        # interface UP; hostapd itself will bring it UP when it starts.
-        if not cfg.hotspot_mode:
-            out, err, rc = await HostapdService._run(f"ip link set {iface} up")
-            logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
-            if rc != 0:
-                logger.error(f"Failed to bring up {iface}: {err}")
-                return False
-        else:
-            logger.info(f"setup_interface: hotspot mode — skipping 'ip link set up' (hostapd will bring it UP)")
+        # Bring up interface
+        out, err, rc = await HostapdService._run(f"ip link set {iface} up")
+        logger.info(f"setup_interface: 'ip link set {iface} up' rc={rc}, err={err}")
+        if rc != 0:
+            logger.error(f"Failed to bring up {iface}: {err}")
+            return False
 
         logger.info(f"WLAN interface {iface} configured with IP {cfg.ip}/{prefix_len}")
         return True
@@ -451,7 +446,7 @@ class HostapdService:
             # Run with -dd in foreground to capture detailed error output
             logger.error(f"hostapd -B failed (rc={rc}), running -dd diagnostic...")
             # timeout the foreground run after 5s so we don't hang
-            hostapd_debug_cmd = f"timeout 5 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
+            hostapd_debug_cmd = f"timeout 2 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
             debug_out, debug_err, debug_rc = await HostapdService._run(hostapd_debug_cmd)
             diag = (debug_out + "\n" + debug_err).strip()
             logger.error(f"hostapd -dd diagnostic output:\n{diag}")
@@ -467,7 +462,7 @@ class HostapdService:
         )
         if verify_rc != 0:
             logger.error("start: hostapd exited immediately after daemonizing — running diagnostic")
-            hostapd_debug_cmd = f"timeout 5 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
+            hostapd_debug_cmd = f"timeout 2 hostapd -dd {HOSTAPD_CONF_PATH} 2>&1 || true"
             debug_out, debug_err, debug_rc = await HostapdService._run(hostapd_debug_cmd)
             diag = (debug_out + "\n" + debug_err).strip()
             logger.error(f"hostapd -dd diagnostic output:\n{diag}")

@@ -319,26 +319,18 @@ def _configure_lan_port(lp: LANPort):
         ["ip", "addr", "add", f"{lp.ip}/{prefix_len}", "dev", iif],
         capture_output=True, timeout=5,
     )
-    # Skip 'ip link set up' for virtual AP interfaces (hotspot mode) —
-    # the kernel doesn't allow manually bringing __ap type interfaces UP;
-    # hostapd will bring the interface UP when it starts.
-    is_virtual_ap = (
-        settings.wireless.enabled
-        and settings.wireless.hotspot_mode
-        and iif == settings.wireless.virtual_interface
+    subprocess.run(
+        ["ip", "link", "set", iif, "up"],
+        capture_output=True, timeout=5,
     )
-    if not is_virtual_ap:
-        subprocess.run(
-            ["ip", "link", "set", iif, "up"],
-            capture_output=True, timeout=5,
-        )
     logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
 
 
 async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
     """Create a virtual AP interface on the same phy as *wan_iface*.
 
-    Uses ``iw dev <wan_iface> interface add <ap_iface> type __ap``.
+    Uses ``iw dev <wan_iface> interface add <ap_iface> type managed``.
+    hostapd will switch the interface to AP mode via nl80211.
     Returns True on success.
     """
     if platform.system() != "Linux":
@@ -350,16 +342,23 @@ async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
         capture_output=True, timeout=5,
     )
 
+    # Use 'type managed' — hostapd will switch to AP mode via nl80211.
+    # Many drivers don't support 'type __ap' for virtual interfaces.
     result = subprocess.run(
-        ["iw", "dev", wan_iface, "interface", "add", ap_iface, "type", "__ap"],
+        ["iw", "dev", wan_iface, "interface", "add", ap_iface, "type", "managed"],
         capture_output=True, text=True, timeout=5,
     )
     if result.returncode != 0:
         logger.error(f"Failed to create virtual AP {ap_iface}: {result.stderr}")
         return False
 
-    # Do NOT try to bring the interface UP here — virtual __ap interfaces
-    # cannot be brought UP manually; hostapd will do it when it starts.
+    # Bring the interface UP — 'managed' type interfaces can be brought up
+    # manually, and hostapd will switch to AP mode when it starts.
+    subprocess.run(
+        ["ip", "link", "set", ap_iface, "up"],
+        capture_output=True, timeout=5,
+    )
+
     # Verify the interface was created
     check = subprocess.run(
         ["ip", "link", "show", ap_iface],
