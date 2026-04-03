@@ -398,11 +398,23 @@ class HostapdService:
         iface_names = [i["interface"] for i in interfaces]
         logger.info(f"start: detected WLAN interfaces: {iface_names}")
         if cfg.interface not in iface_names:
-            logger.error(f"start: target interface '{cfg.interface}' not in {iface_names}")
-            return {
-                "success": False,
-                "error": f"Interface '{cfg.interface}' not found. Available: {iface_names}",
-            }
+            # In hotspot mode, the virtual AP may not exist yet — recreate it
+            if cfg.hotspot_mode and cfg.wan_interface:
+                logger.warning(
+                    f"start: virtual AP {cfg.interface} missing — recreating from {cfg.wan_interface}"
+                )
+                from app.routers.setup import _create_virtual_ap
+                ok = await _create_virtual_ap(cfg.wan_interface, cfg.interface)
+                if not ok:
+                    logger.error(f"start: failed to recreate virtual AP {cfg.interface}")
+                    return {"success": False, "error": f"Failed to create virtual AP {cfg.interface}"}
+                logger.info(f"start: virtual AP {cfg.interface} recreated")
+            else:
+                logger.error(f"start: target interface '{cfg.interface}' not in {iface_names}")
+                return {
+                    "success": False,
+                    "error": f"Interface '{cfg.interface}' not found. Available: {iface_names}",
+                }
 
         # Generate config
         config_content = await HostapdService.generate_config()
@@ -534,22 +546,7 @@ class HostapdService:
         stop_result = await HostapdService.stop()
         logger.info(f"restart: stop completed, result={stop_result}")
 
-        # In hotspot mode, check if the virtual AP interface survived the stop.
-        # Some drivers/kernels remove the __ap interface when hostapd exits.
-        if cfg.hotspot_mode:
-            out, err, rc = await HostapdService._run(f"ip link show {cfg.interface} 2>/dev/null")
-            if rc != 0:
-                logger.warning(
-                    f"restart: virtual AP {cfg.interface} disappeared after stop — "
-                    f"recreating from {cfg.wan_interface}"
-                )
-                from app.routers.setup import _create_virtual_ap
-                ok = await _create_virtual_ap(cfg.wan_interface, cfg.interface)
-                if not ok:
-                    logger.error(f"restart: failed to recreate virtual AP {cfg.interface}")
-                    return {"success": False, "error": f"Failed to recreate virtual AP {cfg.interface}"}
-                logger.info(f"restart: virtual AP {cfg.interface} recreated successfully")
-
+        # start() will auto-recreate the virtual AP if it disappeared
         start_result = await HostapdService.start()
         logger.info(f"restart: start completed, result={start_result}")
         return start_result
