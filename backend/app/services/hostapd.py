@@ -188,7 +188,17 @@ class HostapdService:
             f"ssid={cfg.ssid}",
             f"hw_mode={cfg.hw_mode}",
             f"channel={cfg.channel}",
-            f"country_code={cfg.country_code}",
+        ]
+
+        # In hotspot mode the virtual AP shares the physical radio which
+        # already has its regulatory domain from the station connection.
+        # Setting country_code again triggers a COUNTRY_UPDATE that fails
+        # with "Failed to set beacon parameters".
+        if not cfg.hotspot_mode:
+            lines.append(f"country_code={cfg.country_code}")
+            lines.append("ieee80211d=1")
+
+        lines += [
             f"max_num_sta={cfg.max_clients}",
             "",
             "# Logging",
@@ -217,6 +227,10 @@ class HostapdService:
             lines.append("ieee80211ac=1")
         else:
             lines.append("ieee80211ac=0")
+
+        # DFS compliance (required for 5GHz with ieee80211d)
+        if cfg.hw_mode == "a" and not cfg.hotspot_mode:
+            lines.append("ieee80211h=1")
 
         lines.append("")
 
@@ -346,6 +360,16 @@ class HostapdService:
             logger.error("start: setup_interface() returned False — aborting")
             return {"success": False, "error": "Failed to configure WLAN interface"}
         logger.info("start: setup_interface() succeeded")
+
+        # Set system regulatory domain before starting hostapd.
+        # Skip in hotspot mode — the radio already has its regulatory domain
+        # from the active station connection; changing it causes beacon errors.
+        if not cfg.hotspot_mode:
+            reg_cmd = f"iw reg set {cfg.country_code}"
+            out, err, rc = await HostapdService._run(reg_cmd)
+            logger.info(f"start: '{reg_cmd}' rc={rc}, err={err}")
+            if rc == 0:
+                await asyncio.sleep(0.5)
 
         # Stop existing hostapd if running
         out, err, rc = await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")

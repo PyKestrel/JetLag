@@ -130,6 +130,28 @@ async def lifespan(app: FastAPI):
 
     logger.info("JetLag appliance shutting down...")
 
+    # Clean up wireless AP and virtual interface on shutdown
+    if cfg.wireless.enabled:
+        try:
+            from app.services.hostapd import HostapdService
+            await HostapdService.stop()
+            logger.info("Wireless AP stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop wireless AP on shutdown: {e}")
+
+        # Remove virtual AP interface if hotspot mode
+        if cfg.wireless.hotspot_mode:
+            try:
+                import subprocess
+                ap_iface = cfg.wireless.virtual_interface or "ap0"
+                subprocess.run(
+                    ["iw", "dev", ap_iface, "del"],
+                    capture_output=True, timeout=5,
+                )
+                logger.info(f"Virtual AP interface {ap_iface} removed")
+            except Exception as e:
+                logger.error(f"Failed to remove virtual AP interface: {e}")
+
 
 app = FastAPI(
     title="JetLag",
