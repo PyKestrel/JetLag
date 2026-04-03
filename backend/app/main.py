@@ -22,8 +22,9 @@ def setup_logging():
     from logging.handlers import RotatingFileHandler
 
     fmt = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    formatter = logging.Formatter(fmt)
 
-    # Try /var/log/jetlag first, fall back to ./logs next to backend/
+    # Find a writable log directory
     log_file = None
     candidates = [
         Path("/var/log/jetlag"),
@@ -39,18 +40,26 @@ def setup_logging():
         except OSError:
             continue
 
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    # Configure the "jetlag" logger directly (all our code uses
+    # logging.getLogger("jetlag") or children like "jetlag.setup").
+    jl = logging.getLogger("jetlag")
+    jl.setLevel(logging.DEBUG)
+    jl.propagate = True  # also show in uvicorn's stdout
+
     if log_file:
-        file_handler = RotatingFileHandler(
+        fh = RotatingFileHandler(
             log_file, maxBytes=5 * 1024 * 1024, backupCount=3,
         )
-        file_handler.setFormatter(logging.Formatter(fmt))
-        handlers.append(file_handler)
+        fh.setFormatter(formatter)
+        jl.addHandler(fh)
         print(f"[JetLag] Log file: {log_file}")
     else:
         print(f"[JetLag] WARNING: Could not create log file in any of: {[str(p) for p in candidates]}")
 
-    logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
+    # Always add a stream handler to the jetlag logger
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    jl.addHandler(sh)
 
 
 @asynccontextmanager
