@@ -184,6 +184,7 @@ class HostapdService:
         lines = [
             "# JetLag hostapd configuration — auto-generated",
             f"interface={cfg.interface}",
+            "driver=nl80211",
             f"ssid={cfg.ssid}",
             f"hw_mode={cfg.hw_mode}",
             f"channel={cfg.channel}",
@@ -312,12 +313,12 @@ class HostapdService:
         # Generate config
         await HostapdService.generate_config()
 
-        # In hotspot mode the virtual AP interface IP is already configured
-        # by _configure_lan_port during setup, so skip setup_interface.
-        if not cfg.hotspot_mode:
-            ok = await HostapdService.setup_interface()
-            if not ok:
-                return {"success": False, "error": "Failed to configure WLAN interface"}
+        # Always configure the interface IP and bring it UP — even in hotspot
+        # mode, because stop()/teardown flushes the IP and the interface may
+        # be DOWN after a restart cycle.
+        ok = await HostapdService.setup_interface()
+        if not ok:
+            return {"success": False, "error": "Failed to configure WLAN interface"}
 
         # Stop existing hostapd if running
         await HostapdService._run("pkill -f 'hostapd.*jetlag' 2>/dev/null")
