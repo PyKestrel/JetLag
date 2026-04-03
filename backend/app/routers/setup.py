@@ -319,10 +319,19 @@ def _configure_lan_port(lp: LANPort):
         ["ip", "addr", "add", f"{lp.ip}/{prefix_len}", "dev", iif],
         capture_output=True, timeout=5,
     )
-    subprocess.run(
-        ["ip", "link", "set", iif, "up"],
-        capture_output=True, timeout=5,
+    # Skip 'ip link set up' for virtual AP interfaces (hotspot mode) —
+    # the kernel doesn't allow manually bringing __ap type interfaces UP;
+    # hostapd will bring the interface UP when it starts.
+    is_virtual_ap = (
+        settings.wireless.enabled
+        and settings.wireless.hotspot_mode
+        and iif == settings.wireless.virtual_interface
     )
+    if not is_virtual_ap:
+        subprocess.run(
+            ["ip", "link", "set", iif, "up"],
+            capture_output=True, timeout=5,
+        )
     logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
 
 

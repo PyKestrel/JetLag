@@ -267,11 +267,14 @@ class HostapdService:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
 
-        # Bring up interface
-        _, err, rc = await HostapdService._run(f"ip link set {iface} up")
-        if rc != 0:
-            logger.error(f"Failed to bring up {iface}: {err}")
-            return False
+        # Bring up interface — skip for virtual AP interfaces (hotspot mode)
+        # because the kernel doesn't allow manually bringing a __ap type
+        # interface UP; hostapd itself will bring it UP when it starts.
+        if not cfg.hotspot_mode:
+            _, err, rc = await HostapdService._run(f"ip link set {iface} up")
+            if rc != 0:
+                logger.error(f"Failed to bring up {iface}: {err}")
+                return False
 
         logger.info(f"WLAN interface {iface} configured with IP {cfg.ip}")
         return True
