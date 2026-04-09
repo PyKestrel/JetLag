@@ -211,12 +211,12 @@ export default function ClientsPage() {
                         {client.auth_state === 'authenticated' ? (
                           <span className="inline-flex items-center gap-1 text-[12px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            HEALTHY
+                            AUTHENTICATED
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-                            INACTIVE
+                            PENDING
                           </span>
                         )}
                       </td>
@@ -241,7 +241,7 @@ export default function ClientsPage() {
           {/* Pagination — Cloudflare style */}
           <div className="flex items-center justify-between mt-3 text-[12px] text-muted-foreground">
             <span>
-              1–{filtered.length} of {data.total} items
+              {(page - 1) * 10 + 1}–{(page - 1) * 10 + filtered.length} of {data.total} items
               <span className="mx-2">|</span>
               Items per page: 10
             </span>

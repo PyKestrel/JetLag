@@ -36,13 +36,13 @@ import {
 function StatusBadge({ running }: { running: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium ${
         running
-          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-          : 'bg-zinc-500/10 text-zinc-400 border border-zinc-500/20'
+          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+          : 'bg-gray-100 text-gray-500 border border-gray-200'
       }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
+      <span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
       {running ? 'Running' : 'Stopped'}
     </span>
   )
@@ -169,11 +169,11 @@ export default function WirelessPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
+          <h1 className="text-[22px] font-semibold text-foreground flex items-center gap-2">
             <Wifi className="h-5 w-5" />
             Wireless Access Point
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-[14px] text-muted-foreground mt-1">
             Configure and manage the WLAN access point for wireless captive portal testing
           </p>
         </div>
@@ -191,20 +191,20 @@ export default function WirelessPage() {
 
       {/* Messages */}
       {error && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[13px] text-red-800 flex items-center gap-2">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
           {error}
         </div>
       )}
       {success && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[13px] text-emerald-800 flex items-center gap-2">
           <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
           {success}
         </div>
       )}
 
       {/* Status Card */}
-      <div className="rounded-xl border border-border bg-card p-5">
+      <div className="rounded-md border border-border bg-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-medium text-foreground flex items-center gap-2">
             <Radio className="h-4 w-4 text-muted-foreground" />
@@ -308,7 +308,7 @@ export default function WirelessPage() {
       {activeTab === 'config' && (
         <div className="space-y-6">
           {/* General Settings */}
-          <div className="rounded-xl border border-border bg-card p-5">
+          <div className="rounded-md border border-border bg-card p-5">
             <h3 className="text-sm font-medium text-foreground mb-4 flex items-center gap-2">
               <Wifi className="h-4 w-4 text-muted-foreground" />
               General Settings
@@ -424,7 +424,7 @@ export default function WirelessPage() {
           </div>
 
           {/* Security Settings */}
-          <div className="rounded-xl border border-border bg-card p-5">
+          <div className="rounded-md border border-border bg-card p-5">
             <h3 className="text-sm font-medium text-foreground mb-4 flex items-center gap-2">
               <Shield className="h-4 w-4 text-muted-foreground" />
               Security
@@ -484,7 +484,7 @@ export default function WirelessPage() {
           </div>
 
           {/* Network Settings */}
-          <div className="rounded-xl border border-border bg-card p-5">
+          <div className="rounded-md border border-border bg-card p-5">
             <h3 className="text-sm font-medium text-foreground mb-4 flex items-center gap-2">
               <Signal className="h-4 w-4 text-muted-foreground" />
               Network & DHCP
@@ -566,7 +566,7 @@ export default function WirelessPage() {
 
       {/* Stations Tab */}
       {activeTab === 'stations' && (
-        <div className="rounded-xl border border-border bg-card">
+        <div className="rounded-md border border-border bg-card">
           {stations.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
               {isRunning ? (

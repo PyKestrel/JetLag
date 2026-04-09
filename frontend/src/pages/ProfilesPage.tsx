@@ -344,7 +344,7 @@ export default function ProfilesPage() {
 
           {/* Pagination */}
           <div className="flex items-center justify-between mt-3 text-[12px] text-muted-foreground">
-            <span>1–{filtered.length} of {data.total} items <span className="mx-2">|</span> Items per page: 10</span>
+            <span>{(page - 1) * 10 + 1}–{(page - 1) * 10 + filtered.length} of {data.total} items <span className="mx-2">|</span> Items per page: 10</span>
             <div className="flex items-center gap-1">
               <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="p-1 rounded hover:bg-accent disabled:opacity-30 transition-colors">
                 <ChevronLeft className="h-4 w-4" />

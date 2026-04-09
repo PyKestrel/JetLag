@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard,
   Monitor,
@@ -197,15 +197,6 @@ export default function Layout() {
           </div>
         </div>
 
-        {/* Quick search */}
-        <div className="px-3 py-2.5">
-          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded bg-[hsl(var(--sidebar-hover))] text-[hsl(var(--sidebar-fg))]">
-            <Search className="h-3.5 w-3.5 opacity-60" />
-            <span className="text-[12px]">Quick search...</span>
-            <span className="ml-auto text-[10px] opacity-40 font-mono">/</span>
-          </div>
-        </div>
-
         {/* Nav sections */}
         <nav className="flex-1 px-2 pb-4 space-y-1 overflow-y-auto">
           {navSections.map((section) => (
@@ -267,9 +258,9 @@ export default function Layout() {
           <div className="flex items-center justify-center gap-4 text-[11px] text-muted-foreground">
             <span>JetLag v{appVersion || '…'}</span>
             <span className="opacity-30">|</span>
-            <a href="/settings" className="hover:text-foreground transition-colors">Settings</a>
+            <Link to="/settings" className="hover:text-foreground transition-colors">Settings</Link>
             <span className="opacity-30">|</span>
-            <a href="/logs" className="hover:text-foreground transition-colors">Logs</a>
+            <Link to="/logs" className="hover:text-foreground transition-colors">Logs</Link>
           </div>
         </footer>
       </div>

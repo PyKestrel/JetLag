@@ -177,7 +177,7 @@ export default function LogsPage() {
           {/* Pagination */}
           <div className="flex items-center justify-between mt-3 text-[12px] text-muted-foreground">
             <span>
-              1–{filtered.length} of {data.total} items
+              {(page - 1) * 50 + 1}–{(page - 1) * 50 + filtered.length} of {data.total} items
               <span className="mx-2">|</span>
               Items per page: 50
             </span>

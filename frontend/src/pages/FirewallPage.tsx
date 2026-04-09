@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Plus,
   Trash2,
@@ -91,10 +91,22 @@ export default function FirewallPage() {
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPresets, setShowPresets] = useState(false)
   const [statusData, setStatusData] = useState<{ chains: number; rules_count: number } | null>(null)
+  const presetsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     getFirewallStatus().then(setStatusData).catch(() => {})
   }, [data])
+
+  useEffect(() => {
+    if (!showPresets) return
+    const handler = (e: MouseEvent) => {
+      if (presetsRef.current && !presetsRef.current.contains(e.target as Node)) {
+        setShowPresets(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showPresets])
 
   const openCreate = () => {
     setEditingRule(null)
@@ -208,7 +220,7 @@ export default function FirewallPage() {
             <Zap className="h-3.5 w-3.5" />
             {applying ? 'Applying...' : 'Apply Rules'}
           </button>
-          <div className="relative">
+          <div className="relative" ref={presetsRef}>
             <button
               onClick={() => setShowPresets(!showPresets)}
               className="inline-flex items-center gap-1.5 px-3 py-[7px] text-[13px] font-medium rounded-md border border-border bg-card hover:bg-accent transition-colors"
