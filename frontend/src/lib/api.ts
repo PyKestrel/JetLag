@@ -668,3 +668,142 @@ export const getWirelessStatus = () =>
 
 export const getWirelessStations = () =>
   request<{ stations: WirelessStation[]; count: number }>('/wireless/stations');
+
+// ── Replay Engine ─────────────────────────────────────────────
+
+export interface ReplayStep {
+  id: number;
+  scenario_id: number;
+  step_index: number;
+  offset_ms: number;
+  duration_ms: number;
+  latency_ms: number;
+  jitter_ms: number;
+  packet_loss_percent: number;
+  bandwidth_kbps: number;
+}
+
+export interface ReplayScenario {
+  id: number;
+  name: string;
+  description: string | null;
+  default_direction: string;
+  total_duration_ms: number;
+  step_count: number;
+  source_filename: string | null;
+  created_at: string;
+  updated_at: string;
+  steps: ReplayStep[];
+}
+
+export interface ReplayScenarioListItem {
+  id: number;
+  name: string;
+  description: string | null;
+  default_direction: string;
+  total_duration_ms: number;
+  step_count: number;
+  source_filename: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReplaySessionStart {
+  profile_id: number;
+  scenario_id: number;
+  loop?: boolean;
+  playback_speed?: number;
+  start_offset_ms?: number | null;
+  end_offset_ms?: number | null;
+}
+
+export interface ReplaySessionStatus {
+  profile_id: number;
+  scenario_id: number | null;
+  state: 'idle' | 'running' | 'paused' | 'completed' | 'stopped';
+  current_step_index: number;
+  total_steps: number;
+  elapsed_ms: number;
+  total_ms: number;
+  loop: boolean;
+  loop_count: number;
+  playback_speed: number;
+  current_values: {
+    latency_ms: number;
+    jitter_ms: number;
+    packet_loss_percent: number;
+    bandwidth_kbps: number;
+  } | null;
+  has_snapshot: boolean;
+}
+
+export const importReplayScenario = async (file: File): Promise<ReplayScenario> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}/replay/scenarios/import`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || body.message || `${res.statusText} (${res.status})`);
+  }
+  return res.json();
+};
+
+export const getReplayScenarios = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<ReplayScenarioListItem>>(`/replay/scenarios${qs}`);
+};
+
+export const getReplayScenario = (id: number) =>
+  request<ReplayScenario>(`/replay/scenarios/${id}`);
+
+export const updateReplayScenario = (id: number, data: { name?: string; description?: string; default_direction?: string; steps?: Omit<ReplayStep, 'id' | 'scenario_id' | 'step_index'>[] }) =>
+  request<ReplayScenario>(`/replay/scenarios/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const deleteReplayScenario = (id: number) =>
+  request<{ message: string }>(`/replay/scenarios/${id}`, { method: 'DELETE' });
+
+export const getReplayScenarioExportUrl = (id: number, format: 'json' | 'yaml' = 'json') =>
+  `${API_BASE}/replay/scenarios/${id}/export?format=${format}`;
+
+export const startReplaySession = (data: ReplaySessionStart) =>
+  request<ReplaySessionStatus>('/replay/sessions/start', { method: 'POST', body: JSON.stringify(data) });
+
+export const stopReplaySession = (profileId: number) =>
+  request<ReplaySessionStatus>(`/replay/sessions/${profileId}/stop`, { method: 'POST' });
+
+export const pauseReplaySession = (profileId: number) =>
+  request<ReplaySessionStatus>(`/replay/sessions/${profileId}/pause`, { method: 'POST' });
+
+export const resumeReplaySession = (profileId: number) =>
+  request<ReplaySessionStatus>(`/replay/sessions/${profileId}/resume`, { method: 'POST' });
+
+export const getReplaySessionStatus = (profileId: number) =>
+  request<ReplaySessionStatus>(`/replay/sessions/${profileId}/status`);
+
+export const revertReplayProfile = (profileId: number) =>
+  request<{ message: string; profile_id: number }>(`/replay/sessions/${profileId}/revert`, { method: 'POST' });
+
+export interface ReplayHistoryEntry {
+  id: number;
+  profile_id: number;
+  profile_name: string;
+  scenario_id: number;
+  scenario_name: string;
+  state: string;
+  steps_played: number;
+  total_steps: number;
+  elapsed_ms: number;
+  total_ms: number;
+  loop_count: number;
+  playback_speed: number;
+  started_at: string;
+  ended_at: string;
+}
+
+export const getReplayHistory = (params?: Record<string, string>) => {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return request<PaginatedResponse<ReplayHistoryEntry>>(`/replay/history${qs}`);
+};

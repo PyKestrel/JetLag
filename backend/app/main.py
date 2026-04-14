@@ -10,7 +10,7 @@ from app.database import init_db
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 
-from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt, wireless
+from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt, wireless, replay
 from app.services.impairment import ImpairmentService
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
@@ -220,6 +220,7 @@ app.include_router(updates.router)
 app.include_router(firewall.router)
 app.include_router(router_mgmt.router)
 app.include_router(wireless.router)
+app.include_router(replay.router)
 
 
 @app.middleware("http")

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Plus, Trash2, Pencil, RefreshCw, Search, MoreVertical, Power, PowerOff,
   ChevronLeft, ChevronRight, ArrowRight, ArrowLeft, Check, AlertCircle, Loader2,
+  Activity,
 } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import {
@@ -14,6 +15,7 @@ import {
   type MatchRule,
   type PaginatedResponse,
 } from '@/lib/api'
+import ReplayEngineTab from './ReplayEngineTab'
 
 /* ── Constants ──────────────────────────────────────────────────── */
 type RuleMatchType = 'ip' | 'subnet' | 'mac'
@@ -102,6 +104,7 @@ function ProfileActionMenu({ profile, onEdit, onToggle, onDelete }: {
 }
 
 export default function ProfilesPage() {
+  const [activeTab, setActiveTab] = useState<'profiles' | 'replay'>('profiles')
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
@@ -233,6 +236,33 @@ export default function ProfilesPage() {
         </p>
       </div>
 
+      {/* Tab bar */}
+      <div className="flex border-b border-border mb-6">
+        <button
+          onClick={() => setActiveTab('profiles')}
+          className={`relative px-5 py-2.5 text-[13px] font-medium transition-colors ${
+            activeTab === 'profiles' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Profiles
+          {activeTab === 'profiles' && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary rounded-t" />}
+        </button>
+        <button
+          onClick={() => setActiveTab('replay')}
+          className={`relative px-5 py-2.5 text-[13px] font-medium transition-colors flex items-center gap-1.5 ${
+            activeTab === 'replay' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Activity className="h-3.5 w-3.5" /> Replay Engine
+          {activeTab === 'replay' && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary rounded-t" />}
+        </button>
+      </div>
+
+      {/* Replay Engine tab */}
+      {activeTab === 'replay' && <ReplayEngineTab />}
+
+      {/* Profiles tab */}
+      {activeTab === 'profiles' && <>
       {/* Section header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-[15px] font-semibold text-foreground">
@@ -383,6 +413,7 @@ export default function ProfilesPage() {
           setRuleTypes={setRuleTypes}
         />
       )}
+      </>}
     </div>
   )
 }
