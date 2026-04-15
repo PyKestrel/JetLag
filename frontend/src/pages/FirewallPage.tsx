@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Switch } from '@/components/ui/Switch'
 import {
   Plus,
   Trash2,
@@ -486,17 +487,11 @@ export default function FirewallPage() {
                   <p className="text-[11px] text-muted-foreground">Lower = evaluated first</p>
                 </div>
                 <div className="flex items-center gap-3 pt-6">
-                  <button
-                    type="button"
-                    onClick={() => setForm({ ...form, enabled: !form.enabled })}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                      form.enabled ? 'bg-primary' : 'bg-gray-300'
-                    }`}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-                      form.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                    }`} />
-                  </button>
+                  <Switch
+                    checked={form.enabled}
+                    onCheckedChange={(enabled) => setForm({ ...form, enabled })}
+                    aria-label="Rule enabled"
+                  />
                   <span className="text-[13px] text-foreground">{form.enabled ? 'Enabled' : 'Disabled'}</span>
                 </div>
               </div>

@@ -15,6 +15,7 @@ import {
   type MatchRule,
   type PaginatedResponse,
 } from '@/lib/api'
+import { Switch } from '@/components/ui/Switch'
 import ReplayEngineTab from './ReplayEngineTab'
 
 /* ── Constants ──────────────────────────────────────────────────── */
@@ -972,13 +973,11 @@ function ProfileWizard({ editingId, form, setForm, saving, onSave, onClose, rule
                       <h3 className="text-[13px] font-semibold text-foreground">Enable immediately</h3>
                       <p className="text-[12px] text-muted-foreground mt-0.5">Apply tc/netem rules as soon as the profile is saved</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, enabled: !form.enabled })}
-                      className={`relative w-9 h-5 rounded-full transition-colors ${form.enabled ? 'bg-primary' : 'bg-gray-300'}`}
-                    >
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-                    </button>
+                    <Switch
+                      checked={form.enabled}
+                      onCheckedChange={(enabled) => setForm({ ...form, enabled })}
+                      aria-label="Enable profile immediately"
+                    />
                   </div>
                 </div>
 
@@ -1195,13 +1194,11 @@ function ProfileFlatEditor({ editingId, form, setForm, saving, onSave, onClose, 
                 <span className="text-[13px] font-medium text-foreground">Enabled</span>
                 <p className="text-[11px] text-muted-foreground">Apply tc/netem rules immediately</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, enabled: !form.enabled })}
-                className={`relative w-9 h-5 rounded-full transition-colors ${form.enabled ? 'bg-primary' : 'bg-gray-300'}`}
-              >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${form.enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-              </button>
+              <Switch
+                checked={form.enabled}
+                onCheckedChange={(enabled) => setForm({ ...form, enabled })}
+                aria-label="Profile enabled"
+              />
             </div>
           </div>
         </div>

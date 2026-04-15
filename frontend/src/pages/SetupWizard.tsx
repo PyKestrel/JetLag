@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Switch } from '@/components/ui/Switch'
 import {
   Plane,
   Globe,
@@ -319,12 +320,13 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                             </p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => { setHotspotMode(!hotspotMode); if (!hotspotMode) setLanIface('') }}
-                          className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1 ${hotspotMode ? 'bg-violet-500' : 'bg-gray-300'}`}
-                        >
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${hotspotMode ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-                        </button>
+                        <Switch
+                          variant="violet"
+                          checked={hotspotMode}
+                          onCheckedChange={(v) => { setHotspotMode(v); if (v) setLanIface('') }}
+                          className="mt-1"
+                          aria-label="Hotspot mode"
+                        />
                       </div>
 
                       {hotspotMode && (
@@ -490,12 +492,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <div className="rounded-lg border border-border overflow-hidden mb-6">
               <div className="bg-muted/40 px-5 py-3 border-b border-border flex items-center justify-between">
                 <h3 className="text-[13px] font-semibold text-foreground">DHCP server</h3>
-                <button
-                  onClick={() => setDhcpEnabled(!dhcpEnabled)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${dhcpEnabled ? 'bg-primary' : 'bg-gray-300'}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${dhcpEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-                </button>
+                <Switch
+                  checked={dhcpEnabled}
+                  onCheckedChange={setDhcpEnabled}
+                  aria-label="DHCP server enabled"
+                />
               </div>
               {dhcpEnabled && (
                 <div className="p-5 grid grid-cols-3 gap-4">
@@ -568,12 +569,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       <p className="text-[12px] text-muted-foreground mt-0.5">Redirect all DNS queries to the captive portal IP until clients authenticate.</p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setDnsSpoofing(!dnsSpoofing)}
-                    className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1 ${dnsSpoofing ? 'bg-primary' : 'bg-gray-300'}`}
-                  >
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${dnsSpoofing ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-                  </button>
+                  <Switch
+                    checked={dnsSpoofing}
+                    onCheckedChange={setDnsSpoofing}
+                    className="mt-1"
+                    aria-label="DNS spoofing"
+                  />
                 </div>
               </div>
 
@@ -591,12 +592,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setFirewallEnabled(!firewallEnabled)}
-                    className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1 ${firewallEnabled ? 'bg-primary' : 'bg-gray-300'}`}
-                  >
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${firewallEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-                  </button>
+                  <Switch
+                    checked={firewallEnabled}
+                    onCheckedChange={setFirewallEnabled}
+                    className="mt-1"
+                    aria-label="Firewall enabled"
+                  />
                 </div>
               </div>
 

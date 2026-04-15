@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Save, RotateCcw, CheckCircle2, AlertTriangle, Plus, Trash2, Network, Wifi } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
+import { Switch } from '@/components/ui/Switch'
 import {
   getSettings,
   updateSettings,
@@ -39,25 +40,18 @@ function Field({
   help?: string
 }) {
   if (type === 'toggle') {
+    const on = value === true || value === 'true'
     return (
       <div className="flex items-center justify-between py-2">
         <div>
           <label className="text-[13px] font-medium text-foreground">{label}</label>
           {help && <p className="text-[12px] text-muted-foreground mt-0.5">{help}</p>}
         </div>
-        <button
-          type="button"
-          onClick={() => onChange(value ? 'false' : 'true')}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-            value ? 'bg-primary' : 'bg-gray-300'
-          }`}
-        >
-          <span
-            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-              value ? 'translate-x-[18px]' : 'translate-x-[3px]'
-            }`}
-          />
-        </button>
+        <Switch
+          checked={on}
+          onCheckedChange={(c) => onChange(c ? 'true' : 'false')}
+          aria-label={label}
+        />
       </div>
     )
   }

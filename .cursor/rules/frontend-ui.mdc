@@ -1,0 +1,22 @@
+---
+description: Frontend UI patterns and design-system references for JetLag admin
+globs: frontend/**/*.tsx,frontend/**/*.ts
+---
+
+# JetLag admin UI
+
+This app is **not** built with [Kumo UI](https://kumo-ui.com). The [Kumo Component Registry](https://kumo-ui.com/registry.md) is Cloudflare’s machine-readable catalog (props, variants, examples) for **Kumo** components—use it when intentionally adding or migrating to `@cloudflare/kumo`, via `npx @cloudflare/kumo doc <Component>` or the JSON API.
+
+## Stack in this repo
+
+- **React 18 + Vite + Tailwind CSS**
+- **Radix UI** primitives (`@radix-ui/react-*`) for accessible behavior (switch, dialog, select, etc.)
+- **`cn()`** from `@/lib/utils` (clsx + tailwind-merge) for class composition
+- **CVA** where variants are needed
+- **lucide-react** for icons
+
+## Practices aligned with registry-style systems
+
+1. Prefer **Radix-based wrappers** in `frontend/src/components/ui/` (e.g. `Switch`) over ad-hoc `<button>` toggles so keyboard, ARIA, and focus behavior stay correct.
+2. Document **variants** via TypeScript props (`variant?: 'default' | 'violet'`) and `cn()` for track/thumb styles.
+3. New interactive controls should have an **`aria-label`** (or associated `<label>`) when the visual context is not enough.
