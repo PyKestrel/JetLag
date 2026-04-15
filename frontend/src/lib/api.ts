@@ -40,6 +40,13 @@ export const updateProfile = (id: number, data: Partial<ImpairmentProfileCreate>
   request<ImpairmentProfile>(`/profiles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProfile = (id: number) =>
   request<{ message: string }>(`/profiles/${id}`, { method: 'DELETE' });
+/** Reset kernel tc/netem and re-apply enabled profiles (fixes stale rules). */
+export const reconcileImpairmentTc = () =>
+  request<{
+    message: string;
+    enabled_count: number;
+    errors: { profile_id: number; name: string; error: string }[];
+  }>('/profiles/reconcile-tc', { method: 'POST' });
 
 // Captures
 export const getCaptures = (params?: Record<string, string>) => {

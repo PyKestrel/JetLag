@@ -48,6 +48,43 @@ async def list_profiles(
     }
 
 
+@router.post("/reconcile-tc", response_model=dict)
+async def reconcile_tc(db: AsyncSession = Depends(get_db)):
+    """Clear all tc/netem state on the LAN/IFB devices, then re-apply enabled profiles.
+
+    Use this when impairment rules are left active in the kernel after a crash,
+    failed removal, or manual tc edits, so the running config matches the database.
+    """
+    await ImpairmentService.remove_all()
+
+    result = await db.execute(
+        select(ImpairmentProfile)
+        .options(selectinload(ImpairmentProfile.match_rules))
+        .where(ImpairmentProfile.enabled.is_(True))
+        .order_by(ImpairmentProfile.id)
+    )
+    enabled = result.scalars().all()
+
+    errors: list[dict] = []
+    for p in enabled:
+        err = await ImpairmentService.apply_profile(p)
+        if err:
+            errors.append({"profile_id": p.id, "name": p.name, "error": err})
+            logger.error(f"reconcile-tc: failed to apply profile {p.id} ({p.name}): {err}")
+
+    await LoggingService.log_impairment_event(
+        db,
+        f"TC reconcile: cleared kernel rules, re-applied {len(enabled)} enabled profile(s)"
+        + (f" ({len(errors)} error(s))" if errors else ""),
+    )
+
+    return {
+        "message": "tc/netem reset and enabled profiles re-applied",
+        "enabled_count": len(enabled),
+        "errors": errors,
+    }
+
+
 @router.get("/{profile_id}", response_model=ImpairmentProfileResponse)
 async def get_profile(profile_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
