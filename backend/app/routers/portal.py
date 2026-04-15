@@ -1,6 +1,9 @@
 import datetime
+import os
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,6 +17,29 @@ from app.services.network import NetworkService
 from app.config import settings
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
+
+
+def _jetlag_yaml_path() -> Path:
+    return Path(
+        os.environ.get(
+            "JETLAG_CONFIG",
+            str(Path(__file__).resolve().parent.parent.parent.parent / "config" / "jetlag.yaml"),
+        )
+    )
+
+
+def _persist_portal_to_yaml() -> None:
+    """Merge `settings.portal` into jetlag.yaml so portal type survives restarts."""
+    path = _jetlag_yaml_path()
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    else:
+        raw = {}
+    raw["portal"] = settings.portal.model_dump()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -118,6 +144,10 @@ async def update_portal_config(payload: PortalConfigUpdate):
         p.redirect_url = payload.redirect_url
     if payload.welcome_message is not None:
         p.welcome_message = payload.welcome_message
+    try:
+        _persist_portal_to_yaml()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save portal config: {e}") from e
     return {"message": "Portal config updated", "portal_type": p.portal_type}
 
 

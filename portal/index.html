@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SkyConnect Wi-Fi</title>
+    <title>Wi-Fi Portal</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -16,7 +16,7 @@
             align-items: center;
             justify-content: center;
             color: #ffffff;
-            overflow: hidden;
+            overflow-x: hidden;
         }
 
         .stars {
@@ -69,17 +69,7 @@
             box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
         }
 
-        .logo {
-            margin-bottom: 8px;
-        }
-
-        .logo svg {
-            width: 64px;
-            height: 64px;
-            fill: #4da6ff;
-        }
-
-        .airline-name {
+        .brand {
             font-size: 13px;
             font-weight: 600;
             letter-spacing: 3px;
@@ -98,70 +88,59 @@
         .subtitle {
             font-size: 15px;
             color: #a0c4e8;
-            margin-bottom: 32px;
+            margin-bottom: 24px;
             line-height: 1.5;
         }
+
+        .panel { display: none; }
+        .panel.active { display: block; }
 
         .info-card {
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 28px;
+            padding: 16px;
+            margin-bottom: 20px;
             text-align: left;
+            font-size: 13px;
+            color: #c0d8ef;
         }
 
         .info-card h3 {
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1px;
             color: #7fbfff;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
 
-        .info-card ul {
-            list-style: none;
-            padding: 0;
-        }
-
+        .info-card ul { list-style: none; padding: 0; }
         .info-card li {
-            font-size: 13px;
-            color: #c0d8ef;
             padding: 6px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             align-items: center;
             gap: 8px;
         }
-
-        .info-card li:last-child {
-            border-bottom: none;
-        }
-
-        .info-card li .dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #4da6ff;
-            flex-shrink: 0;
+        .info-card li:last-child { border-bottom: none; }
+        .dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #4da6ff; flex-shrink: 0;
         }
 
         .tos-text {
             font-size: 12px;
             color: #8aaccf;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             line-height: 1.6;
         }
 
-        .tos-text a {
-            color: #7fbfff;
-            text-decoration: underline;
-        }
+        .tos-text a { color: #7fbfff; }
 
-        .accept-btn {
+        .btn-primary {
             width: 100%;
-            padding: 16px 32px;
+            padding: 14px 24px;
             font-size: 16px;
             font-weight: 600;
             color: #ffffff;
@@ -170,31 +149,25 @@
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.3s ease;
-            letter-spacing: 0.5px;
+            margin-bottom: 8px;
         }
 
-        .accept-btn:hover {
+        .btn-primary:hover:not(:disabled) {
             background: linear-gradient(135deg, #0077ee, #0055cc);
             transform: translateY(-1px);
-            box-shadow: 0 8px 24px rgba(0, 102, 204, 0.4);
         }
 
-        .accept-btn:active {
-            transform: translateY(0);
-        }
-
-        .accept-btn:disabled {
+        .btn-primary:disabled {
             opacity: 0.6;
             cursor: not-allowed;
-            transform: none;
         }
 
-        .accept-btn.loading {
+        .btn-primary.loading {
             position: relative;
             color: transparent;
         }
 
-        .accept-btn.loading::after {
+        .btn-primary.loading::after {
             content: '';
             position: absolute;
             top: 50%; left: 50%;
@@ -206,12 +179,43 @@
             animation: spin 0.7s linear infinite;
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .btn-tier {
+            text-align: left;
+            padding: 16px;
+            margin-bottom: 10px;
         }
 
+        .btn-tier .plan-name { font-size: 16px; font-weight: 600; }
+        .btn-tier .plan-meta { font-size: 12px; color: #a0c4e8; margin-top: 4px; }
+
+        .form-row {
+            text-align: left;
+            margin-bottom: 14px;
+        }
+
+        .form-row label {
+            display: block;
+            font-size: 12px;
+            color: #7fbfff;
+            margin-bottom: 6px;
+        }
+
+        .form-row input {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0,0,0,0.25);
+            color: #fff;
+            font-size: 15px;
+        }
+
+        .form-row input::placeholder { color: #6a8aaf; }
+
         .status-msg {
-            margin-top: 16px;
+            margin-top: 12px;
             font-size: 14px;
             min-height: 20px;
         }
@@ -220,95 +224,299 @@
         .status-msg.success { color: #69db7c; }
 
         .footer {
-            margin-top: 24px;
+            margin-top: 20px;
             font-size: 11px;
             color: #5a8ab5;
+        }
+
+        #loadingScreen {
+            text-align: center;
+            padding: 40px;
+            color: #a0c4e8;
         }
     </style>
 </head>
 <body>
     <div class="stars"></div>
 
-    <div class="container">
-        <div class="logo">
-            <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-                <path d="M32 4 L58 28 L50 28 L50 56 L14 56 L14 28 L6 28 Z" opacity="0" />
-                <path d="M8 32 C8 32 14 20 32 12 C50 20 56 32 56 32 L52 34 C52 34 47 24 32 18 C17 24 12 34 12 34 Z" />
-                <path d="M4 38 L32 8 L60 38 L56 40 L32 14 L8 40 Z" />
-                <circle cx="32" cy="38" r="4" />
-                <path d="M24 42 C24 42 28 50 32 50 C36 50 40 42 40 42 L44 44 C44 44 38 56 32 56 C26 56 20 44 20 44 Z" />
-            </svg>
+    <div id="loadingScreen">Loading portal…</div>
+
+    <div class="container" id="portalRoot" style="display:none">
+        <div class="brand">JetLag</div>
+        <h1 id="mainTitle">Wi-Fi access</h1>
+        <p class="subtitle" id="subtitle"></p>
+
+        <!-- click_through -->
+        <div class="panel" id="panel-click">
+            <p class="tos-text">
+                By connecting, you agree to the Terms of Service and Acceptable Use Policy.
+            </p>
+            <button type="button" class="btn-primary" id="btnAccept">Connect</button>
         </div>
 
-        <div class="airline-name">SkyConnect Airlines</div>
-
-        <h1>Welcome Aboard</h1>
-        <p class="subtitle">Connect to our in-flight Wi-Fi to stay connected at 35,000 feet.</p>
-
-        <div class="info-card">
-            <h3>Connection Details</h3>
-            <ul>
-                <li><span class="dot"></span>Network: SkyConnect-WiFi</li>
-                <li><span class="dot"></span>Speed: Up to 15 Mbps</li>
-                <li><span class="dot"></span>Session: Complimentary</li>
-                <li><span class="dot"></span>Coverage: Gate-to-Gate</li>
-            </ul>
+        <!-- web_login -->
+        <div class="panel" id="panel-login">
+            <div class="form-row">
+                <label for="loginUser">Username</label>
+                <input type="text" id="loginUser" autocomplete="username" />
+            </div>
+            <div class="form-row">
+                <label for="loginPass">Password</label>
+                <input type="password" id="loginPass" autocomplete="current-password" />
+            </div>
+            <button type="button" class="btn-primary" id="btnLogin">Sign in</button>
         </div>
 
-        <p class="tos-text">
-            By clicking "Connect to Wi-Fi" below, you agree to the
-            <a href="#">Terms of Service</a> and <a href="#">Acceptable Use Policy</a>.
-            Bandwidth may be limited. VPN connections may experience reduced performance.
-        </p>
+        <!-- tiered -->
+        <div class="panel" id="panel-tiered">
+            <p class="tos-text">Choose a plan. You can upgrade later if your network allows it.</p>
+            <div id="tieredButtons"></div>
+        </div>
 
-        <button class="accept-btn" id="acceptBtn" onclick="acceptTOS()">
-            Connect to Wi-Fi
-        </button>
+        <!-- time_limited -->
+        <div class="panel" id="panel-time">
+            <div class="info-card">
+                <h3>Session</h3>
+                <ul>
+                    <li><span class="dot"></span><span id="timeSessionLine">After you connect, access lasts for the time shown below.</span></li>
+                </ul>
+            </div>
+            <p class="tos-text">
+                By connecting, you agree to the Terms of Service. Your session will end automatically when time expires.
+            </p>
+            <button type="button" class="btn-primary" id="btnTimeAccept">Connect</button>
+        </div>
+
+        <!-- walled_garden -->
+        <div class="panel" id="panel-garden">
+            <div class="info-card">
+                <h3>Sites available before sign-in</h3>
+                <ul id="gardenList"></ul>
+            </div>
+            <p class="tos-text">
+                For full internet access, connect below. Limited sites above may work without signing in.
+            </p>
+            <button type="button" class="btn-primary" id="btnGardenAccept">Connect to full internet</button>
+        </div>
 
         <div class="status-msg" id="statusMsg"></div>
-
-        <div class="footer">
-            &copy; 2025 SkyConnect Airlines &mdash; Powered by JetLag Network Simulator
-        </div>
+        <div class="footer">Powered by JetLag Network Simulator</div>
     </div>
 
     <script>
-        async function acceptTOS() {
-            const btn = document.getElementById('acceptBtn');
-            const msg = document.getElementById('statusMsg');
+        let portalConfig = null;
 
-            btn.classList.add('loading');
-            btn.disabled = true;
-            msg.textContent = '';
-            msg.className = 'status-msg';
+        function showMsg(text, ok) {
+            const el = document.getElementById('statusMsg');
+            el.textContent = text || '';
+            el.className = 'status-msg' + (ok === true ? ' success' : ok === false ? ' error' : '');
+        }
 
-            try {
-                const resp = await fetch('/api/portal/accept', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                });
-
-                const data = await resp.json();
-
-                if (resp.ok) {
-                    msg.textContent = 'Connected! Redirecting...';
-                    msg.className = 'status-msg success';
-                    setTimeout(() => {
-                        window.location.href = data.redirect || 'https://www.google.com';
-                    }, 1500);
-                } else {
-                    msg.textContent = data.detail || 'Connection failed. Please try again.';
-                    msg.className = 'status-msg error';
-                    btn.classList.remove('loading');
-                    btn.disabled = false;
-                }
-            } catch (err) {
-                msg.textContent = 'Network error. Please try again.';
-                msg.className = 'status-msg error';
+        function setLoading(btn, on) {
+            if (!btn) return;
+            if (on) {
+                btn.classList.add('loading');
+                btn.disabled = true;
+            } else {
                 btn.classList.remove('loading');
                 btn.disabled = false;
             }
         }
+
+        function formatDuration(minutes) {
+            if (minutes === 0) return 'Unlimited';
+            if (minutes < 60) return minutes + ' minutes';
+            if (minutes % 60 === 0) {
+                var h = minutes / 60;
+                return h === 1 ? '1 hour' : h + ' hours';
+            }
+            return minutes + ' minutes';
+        }
+
+        async function afterAuthSuccess(data, btn) {
+            showMsg('Connected! Redirecting…', true);
+            var url = (data && data.redirect) ? data.redirect : (portalConfig && portalConfig.redirect_url) || 'https://www.google.com';
+            setTimeout(function() { window.location.href = url; }, 800);
+        }
+
+        async function postAccept(btn) {
+            showMsg('', null);
+            setLoading(btn, true);
+            try {
+                var resp = await fetch('/api/portal/accept', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                var data = await resp.json();
+                if (resp.ok && !data.expired) {
+                    await afterAuthSuccess(data, btn);
+                } else {
+                    showMsg(data.detail || data.message || 'Connection failed.', false);
+                    setLoading(btn, false);
+                }
+            } catch (e) {
+                showMsg('Network error. Try again.', false);
+                setLoading(btn, false);
+            }
+        }
+
+        async function postLogin(btn) {
+            var u = document.getElementById('loginUser').value.trim();
+            var p = document.getElementById('loginPass').value;
+            showMsg('', null);
+            setLoading(btn, true);
+            try {
+                var resp = await fetch('/api/portal/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p }),
+                });
+                var data = await resp.json();
+                if (resp.ok) {
+                    await afterAuthSuccess(data, btn);
+                } else {
+                    showMsg(data.detail || 'Invalid credentials.', false);
+                    setLoading(btn, false);
+                }
+            } catch (e) {
+                showMsg('Network error.', false);
+                setLoading(btn, false);
+            }
+        }
+
+        async function postTiered(planIndex, btn) {
+            showMsg('', null);
+            setLoading(btn, true);
+            try {
+                var resp = await fetch('/api/portal/tiered', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plan_index: planIndex }),
+                });
+                var data = await resp.json();
+                if (resp.ok) {
+                    await afterAuthSuccess(data, btn);
+                } else {
+                    showMsg(data.detail || 'Could not select plan.', false);
+                    setLoading(btn, false);
+                }
+            } catch (e) {
+                showMsg('Network error.', false);
+                setLoading(btn, false);
+            }
+        }
+
+        function activatePanel(type) {
+            document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+            var map = {
+                'click_through': 'panel-click',
+                'web_login': 'panel-login',
+                'tiered': 'panel-tiered',
+                'time_limited': 'panel-time',
+                'walled_garden': 'panel-garden',
+            };
+            var id = map[type] || 'panel-click';
+            var panel = document.getElementById(id);
+            if (panel) panel.classList.add('active');
+        }
+
+        (async function init() {
+            try {
+                var r = await fetch('/api/portal/config');
+                portalConfig = await r.json();
+            } catch (e) {
+                document.getElementById('loadingScreen').textContent = 'Cannot load portal configuration.';
+                return;
+            }
+
+            try {
+                var sr = await fetch('/api/portal/status');
+                var status = await sr.json();
+                if (status.authenticated) {
+                    window.location.replace(portalConfig.redirect_url || 'https://www.google.com');
+                    return;
+                }
+            } catch (e) { /* continue */ }
+
+            document.getElementById('loadingScreen').style.display = 'none';
+            document.getElementById('portalRoot').style.display = 'block';
+
+            var cfg = portalConfig;
+            var wm = cfg.welcome_message || 'Connect to the network.';
+            document.getElementById('subtitle').textContent = wm;
+
+            var type = cfg.portal_type || 'click_through';
+
+            if (type === 'time_limited') {
+                var sm = cfg.session_duration_minutes != null ? cfg.session_duration_minutes : 60;
+                document.getElementById('timeSessionLine').textContent =
+                    'Full access lasts ' + formatDuration(sm) + ' after you connect.';
+            }
+
+            if (type === 'walled_garden') {
+                var domains = cfg.walled_garden_domains || [];
+                var ul = document.getElementById('gardenList');
+                ul.innerHTML = '';
+                if (domains.length === 0) {
+                    var li = document.createElement('li');
+                    li.innerHTML = '<span class="dot"></span><span>None configured — administrator can add domains in settings.</span>';
+                    ul.appendChild(li);
+                } else {
+                    domains.forEach(function(d) {
+                        var li = document.createElement('li');
+                        li.innerHTML = '<span class="dot"></span><span></span>';
+                        li.querySelector('span:last-child').textContent = d;
+                        ul.appendChild(li);
+                    });
+                }
+            }
+
+            if (type === 'tiered') {
+                var plans = cfg.tiered_plans || [];
+                var host = document.getElementById('tieredButtons');
+                host.innerHTML = '';
+                if (plans.length === 0) {
+                    host.innerHTML = '<p class="subtitle" style="margin-bottom:16px">No plans are configured yet. Ask an administrator to add tiered plans in the JetLag portal settings.</p>';
+                }
+                plans.forEach(function(plan, idx) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'btn-primary btn-tier';
+                    var name = plan.name || ('Plan ' + (idx + 1));
+                    var dm = plan.duration_minutes != null ? plan.duration_minutes : 0;
+                    b.innerHTML = '<div class="plan-name"></div><div class="plan-meta"></div>';
+                    b.querySelector('.plan-name').textContent = name;
+                    b.querySelector('.plan-meta').textContent =
+                        dm === 0 ? 'Unlimited session' : ('Session: ' + formatDuration(dm));
+                    b.addEventListener('click', function() { postTiered(idx, b); });
+                    host.appendChild(b);
+                });
+            }
+
+            var titles = {
+                click_through: 'Connect to Wi-Fi',
+                web_login: 'Sign in to Wi-Fi',
+                tiered: 'Choose your plan',
+                time_limited: 'Time-limited access',
+                walled_garden: 'Wi-Fi access',
+            };
+            document.getElementById('mainTitle').textContent = titles[type] || titles.click_through;
+
+            activatePanel(type);
+
+            document.getElementById('btnAccept').addEventListener('click', function() {
+                postAccept(document.getElementById('btnAccept'));
+            });
+            document.getElementById('btnTimeAccept').addEventListener('click', function() {
+                postAccept(document.getElementById('btnTimeAccept'));
+            });
+            document.getElementById('btnGardenAccept').addEventListener('click', function() {
+                postAccept(document.getElementById('btnGardenAccept'));
+            });
+            document.getElementById('btnLogin').addEventListener('click', function() {
+                postLogin(document.getElementById('btnLogin'));
+            });
+        })();
     </script>
 </body>
 </html>

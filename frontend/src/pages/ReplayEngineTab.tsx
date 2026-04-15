@@ -3,6 +3,7 @@ import {
   Upload, Trash2, Download, Play, Square, Pause, RotateCcw, RefreshCw,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Clock, Activity,
   Repeat, Loader2, AlertCircle, FileJson, Pencil, Plus, Save, X, History,
+  Laptop,
 } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import {
@@ -17,6 +18,12 @@ import {
 
 const inputCls = "w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
 const labelCls = "text-[12px] font-medium text-muted-foreground mb-1.5 block"
+
+/** JetLag impairment collector — Python CLI for Windows (see tools/collector/README.md). */
+const COLLECTOR_SCRIPT_URL =
+  'https://raw.githubusercontent.com/PyKestrel/JetLag/main/tools/collector/jetlag_collector.py'
+const COLLECTOR_README_URL =
+  'https://github.com/PyKestrel/JetLag/blob/main/tools/collector/README.md'
 
 function fmtDur(ms: number): string {
   const s = Math.floor(ms / 1000)
@@ -244,6 +251,41 @@ export default function ReplayEngineTab() {
 
   return (
     <div className="space-y-6">
+      {/* Windows collector — download scenario builder for use on a PC */}
+      <div className="rounded-lg border border-border overflow-hidden bg-card">
+        <div className="bg-muted/40 px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex gap-3 min-w-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Laptop className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-[14px] font-semibold text-foreground">Windows collector</h3>
+              <p className="text-[12px] text-muted-foreground mt-1 max-w-xl leading-relaxed">
+                Download the Python CLI that records real-world latency, jitter, packet loss, and bandwidth on a Windows machine. It writes replay scenarios you can import below. Requires Python 3.8+; optional iperf3 for bandwidth tests.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <a
+              href={COLLECTOR_SCRIPT_URL}
+              download="jetlag_collector.py"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download jetlag_collector.py
+            </a>
+            <a
+              href={COLLECTOR_README_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium rounded-md border border-border bg-background hover:bg-accent transition-colors"
+            >
+              View docs
+            </a>
+          </div>
+        </div>
+      </div>
+
       {/* ═══ Step Editor Modal ═══ */}
       {editingScenario && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
