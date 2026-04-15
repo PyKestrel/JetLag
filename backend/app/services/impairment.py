@@ -304,10 +304,11 @@ class ImpairmentService:
         effective_profile = _HalvedProfile(profile) if direction == 'both' else profile
 
         for dev in devices:
-            # When direction is 'both', mirror the filter src/dst on the IFB
-            # device so return traffic (where the target IP is the source)
-            # is correctly matched.
-            mirror = (direction == 'both' and dev == _IFB_DEV)
+            # On LAN egress the packet direction is reversed relative to
+            # the user's match-rule perspective (src=client, dst=remote),
+            # so swap src/dst in the tc u32 filter.  IFB traffic already
+            # matches the user's perspective and needs no swap.
+            mirror = (dev == iface)
             err = await ImpairmentService._apply_on_device(dev, effective_profile, mirror_filters=mirror)
             if err:
                 return err

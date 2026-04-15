@@ -157,6 +157,12 @@ table inet jetlag {{
         else:
             logger.info(f"Client {ip} ({mac}) removed from authenticated set")
 
+        # Tear down existing flows so they cannot bypass the captive portal via
+        # the global "ct state established,related accept" forward rule.
+        ct_cmd = f"conntrack -D -s {ip} 2>/dev/null; conntrack -D -d {ip} 2>/dev/null"
+        await FirewallService._run(ct_cmd)
+        logger.debug(f"Flushed conntrack entries after intercept for {ip}")
+
     @staticmethod
     async def reset_all():
         """Remove all IPs from the authenticated set."""

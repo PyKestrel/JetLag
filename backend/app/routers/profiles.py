@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,8 @@ from app.schemas.impairment_profile import (
 )
 from app.services.impairment import ImpairmentService
 from app.services.logging_service import LoggingService
+
+logger = logging.getLogger("jetlag.profiles")
 
 router = APIRouter(prefix="/api/profiles", tags=["impairment_profiles"])
 
@@ -100,7 +104,9 @@ async def create_profile(
     profile = result.scalar_one()
 
     if profile.enabled:
-        await ImpairmentService.apply_profile(profile)
+        err = await ImpairmentService.apply_profile(profile)
+        if err:
+            logger.error(f"Failed to apply profile '{profile.name}' on create: {err}")
 
     await LoggingService.log_impairment_event(
         db, f"Created impairment profile: {profile.name}"
@@ -151,9 +157,13 @@ async def update_profile(
     profile = result.scalar_one()
 
     if profile.enabled:
-        await ImpairmentService.apply_profile(profile)
+        err = await ImpairmentService.apply_profile(profile)
+        if err:
+            logger.error(f"Failed to apply profile '{profile.name}' on update: {err}")
     else:
-        await ImpairmentService.remove_profile(profile)
+        err = await ImpairmentService.remove_profile(profile)
+        if err:
+            logger.error(f"Failed to remove profile '{profile.name}' on update: {err}")
 
     await LoggingService.log_impairment_event(
         db, f"Updated impairment profile: {profile.name}"
