@@ -99,6 +99,7 @@ def collect(args) -> dict:
                 bw = measure_bw_iperf3(args.iperf3_server or target, args.iperf3_port)
 
             steps.append({
+                "timestamp": datetime.datetime.now().isoformat(),
                 "offset_ms": offset_ms, "duration_ms": interval * 1000,
                 "latency_ms": int(round(p["latency_ms"])),
                 "jitter_ms": int(round(p["jitter_ms"])),
