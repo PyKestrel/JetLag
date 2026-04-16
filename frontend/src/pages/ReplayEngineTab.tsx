@@ -101,8 +101,8 @@ export default function ReplayEngineTab() {
   const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null)
   const [loop, setLoop] = useState(false)
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
-  const [startOffsetSec, setStartOffsetSec] = useState('')
-  const [endOffsetSec, setEndOffsetSec] = useState('')
+  const [workStartMs, setWorkStartMs] = useState(0)
+  const [workEndMs, setWorkEndMs] = useState(0)  // 0 = use full scenario length
   const [controlError, setControlError] = useState<string | null>(null)
   const [controlLoading, setControlLoading] = useState(false)
   const [sessionStatus, setSessionStatus] = useState<ReplaySessionStatus | null>(null)
@@ -119,8 +119,14 @@ export default function ReplayEngineTab() {
   const [selectedScenarioData, setSelectedScenarioData] = useState<ReplayScenario | null>(null)
   useEffect(() => {
     if (!selectedScenarioId) { setSelectedScenarioData(null); return }
+    setWorkStartMs(0); setWorkEndMs(0)
     getReplayScenario(selectedScenarioId).then(setSelectedScenarioData).catch(() => setSelectedScenarioData(null))
   }, [selectedScenarioId])
+
+  const handleWorkAreaChange = (startMs: number, endMs: number) => {
+    setWorkStartMs(startMs)
+    setWorkEndMs(endMs)
+  }
 
   // History state
   const [historyPage, setHistoryPage] = useState(1)
@@ -171,8 +177,8 @@ export default function ReplayEngineTab() {
       setSessionStatus(await startReplaySession({
         profile_id: selectedProfileId, scenario_id: selectedScenarioId,
         loop, playback_speed: playbackSpeed,
-        start_offset_ms: startOffsetSec ? Number(startOffsetSec) * 1000 : null,
-        end_offset_ms: endOffsetSec ? Number(endOffsetSec) * 1000 : null,
+        start_offset_ms: workStartMs > 0 ? workStartMs : null,
+        end_offset_ms: workEndMs > 0 ? workEndMs : null,
       }))
     } catch (err) { setControlError(err instanceof Error ? err.message : 'Start failed') }
     setControlLoading(false)
@@ -468,7 +474,7 @@ export default function ReplayEngineTab() {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <label className={labelCls}>Playback Speed</label>
               <div className="flex items-center gap-1">
@@ -491,15 +497,17 @@ export default function ReplayEngineTab() {
                 <Repeat className="h-3.5 w-3.5" /> {loop ? 'Loop' : 'Single'}
               </button>
             </div>
-            <div>
-              <label className={labelCls}>Start offset (s)</label>
-              <input type="number" min={0} value={startOffsetSec} onChange={e => setStartOffsetSec(e.target.value)} placeholder="0" className={inputCls} />
-            </div>
-            <div>
-              <label className={labelCls}>End offset (s)</label>
-              <input type="number" min={0} value={endOffsetSec} onChange={e => setEndOffsetSec(e.target.value)} placeholder="end" className={inputCls} />
-            </div>
           </div>
+
+          {/* ═══ Work Area Timeline (interactive) ═══ */}
+          {selectedScenarioData && selectedScenarioData.steps.length > 0 && (
+            <WorkAreaTimeline
+              steps={selectedScenarioData.steps}
+              workStartMs={workStartMs}
+              workEndMs={workEndMs}
+              onWorkAreaChange={handleWorkAreaChange}
+            />
+          )}
 
           {controlError && (
             <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[12px] text-red-800 flex items-start gap-2">
@@ -604,7 +612,13 @@ export default function ReplayEngineTab() {
 
             {/* ═══ D. Visual Timeline ═══ */}
             {selectedScenarioData && selectedScenarioData.steps.length > 0 && (
-              <StepTimeline steps={selectedScenarioData.steps} currentIndex={sessionStatus.current_step_index} />
+              <WorkAreaTimeline
+                steps={selectedScenarioData.steps}
+                currentIndex={sessionStatus.current_step_index}
+                workStartMs={workStartMs}
+                workEndMs={workEndMs}
+                readOnly
+              />
             )}
           </div>
         </div>
@@ -765,57 +779,175 @@ function ScenarioRow({ scenario, expanded, expandedData, onToggleExpand, onDelet
   )
 }
 
-/* ── Visual step timeline (P9d) ── */
-function StepTimeline({ steps, currentIndex }: { steps: { offset_ms: number; duration_ms: number; latency_ms: number; jitter_ms: number; packet_loss_percent: number; bandwidth_kbps: number }[]; currentIndex: number }) {
-  const W = 700, H = 100, PAD = 24
-  const totalMs = steps.reduce((a, s) => Math.max(a, s.offset_ms + s.duration_ms), 0) || 1
-  const maxLat = Math.max(1, ...steps.map(s => s.latency_ms))
-  const maxBw = Math.max(1, ...steps.map(s => s.bandwidth_kbps))
+/* ── Work Area Timeline (After Effects-style) ── */
+type TimelineStep = { offset_ms: number; duration_ms: number; latency_ms: number; jitter_ms: number; packet_loss_percent: number; bandwidth_kbps: number }
+interface WorkAreaTimelineProps {
+  steps: TimelineStep[]
+  currentIndex?: number
+  workStartMs: number
+  workEndMs: number
+  onWorkAreaChange?: (startMs: number, endMs: number) => void
+  readOnly?: boolean
+}
 
-  const xFor = (ms: number) => PAD + ((ms / totalMs) * (W - PAD * 2))
-  const yLat = (v: number) => H - PAD - ((v / maxLat) * (H - PAD * 2))
-  const yBw = (v: number) => H - PAD - ((v / maxBw) * (H - PAD * 2))
+function WorkAreaTimeline({ steps, currentIndex, workStartMs, workEndMs, onWorkAreaChange, readOnly }: WorkAreaTimelineProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ type: 'left' | 'right' | 'bar'; startX: number; origStart: number; origEnd: number } | null>(null)
 
-  const latPath = steps.map((s, i) => {
-    const x1 = xFor(s.offset_ms), x2 = xFor(s.offset_ms + s.duration_ms), y = yLat(s.latency_ms)
+  const totalMs = steps.reduce((a: number, s: TimelineStep) => Math.max(a, s.offset_ms + s.duration_ms), 0) || 1
+  const maxLat = Math.max(1, ...steps.map((s: TimelineStep) => s.latency_ms))
+  const maxBw = Math.max(1, ...steps.map((s: TimelineStep) => s.bandwidth_kbps))
+
+  const CHART_H = 100, BAR_H = 22, W = 700, PAD = 24, TOTAL_H = CHART_H + BAR_H
+  const minX = PAD, maxX = W - PAD, rangeX = maxX - minX
+  const HANDLE_W = 6, MIN_WORK_MS = 1000
+
+  const msToX = (ms: number) => minX + (ms / totalMs) * rangeX
+  const yLat = (v: number) => BAR_H + CHART_H - PAD - ((v / maxLat) * (CHART_H - PAD * 2))
+  const yBw = (v: number) => BAR_H + CHART_H - PAD - ((v / maxBw) * (CHART_H - PAD * 2))
+
+  const wStartX = msToX(workStartMs)
+  const wEndX = msToX(workEndMs > 0 ? workEndMs : totalMs)
+
+  const latPath = steps.map((s: TimelineStep, i: number) => {
+    const x1 = msToX(s.offset_ms), x2 = msToX(s.offset_ms + s.duration_ms), y = yLat(s.latency_ms)
     return `${i === 0 ? 'M' : 'L'}${x1},${y} L${x2},${y}`
   }).join(' ')
 
-  const bwPath = steps.map((s, i) => {
-    const x1 = xFor(s.offset_ms), x2 = xFor(s.offset_ms + s.duration_ms), y = yBw(s.bandwidth_kbps)
+  const bwPath = steps.map((s: TimelineStep, i: number) => {
+    const x1 = msToX(s.offset_ms), x2 = msToX(s.offset_ms + s.duration_ms), y = yBw(s.bandwidth_kbps)
     return `${i === 0 ? 'M' : 'L'}${x1},${y} L${x2},${y}`
   }).join(' ')
 
-  const curStep = steps[currentIndex]
-  const curX = curStep ? xFor(curStep.offset_ms) : PAD
+  const curStep = currentIndex != null ? steps[currentIndex] : null
+  const curX = curStep ? msToX(curStep.offset_ms) : null
+
+  const onPointerDown = (e: React.PointerEvent, type: 'left' | 'right' | 'bar') => {
+    if (readOnly || !onWorkAreaChange) return
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+    dragRef.current = { type, startX: e.clientX, origStart: workStartMs, origEnd: workEndMs > 0 ? workEndMs : totalMs }
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragRef.current || !onWorkAreaChange || !containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    const pxPerMs = rect.width / totalMs
+    const deltaPx = e.clientX - dragRef.current.startX
+    const deltaMs = Math.round(deltaPx / pxPerMs)
+    const { type, origStart, origEnd } = dragRef.current
+
+    if (type === 'left') {
+      const newStart = Math.max(0, Math.min(origEnd - MIN_WORK_MS, origStart + deltaMs))
+      onWorkAreaChange(newStart, origEnd)
+    } else if (type === 'right') {
+      const newEnd = Math.min(totalMs, Math.max(origStart + MIN_WORK_MS, origEnd + deltaMs))
+      onWorkAreaChange(origStart, newEnd)
+    } else {
+      const span = origEnd - origStart
+      let newStart = origStart + deltaMs
+      if (newStart < 0) newStart = 0
+      if (newStart + span > totalMs) newStart = totalMs - span
+      onWorkAreaChange(newStart, newStart + span)
+    }
+  }
+
+  const onPointerUp = () => { dragRef.current = null }
+
+  const handleBarDoubleClick = () => {
+    if (readOnly || !onWorkAreaChange) return
+    onWorkAreaChange(0, totalMs)
+  }
+
+  const activeWorkEnd = workEndMs > 0 ? workEndMs : totalMs
+  const workLabel = `${(workStartMs / 1000).toFixed(1)}s – ${(activeWorkEnd / 1000).toFixed(1)}s`
 
   return (
-    <div className="mt-4">
+    <div className="mt-4" ref={containerRef}>
       <div className="text-[11px] font-medium text-muted-foreground mb-1.5 flex items-center gap-4">
         Step Timeline
         <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-emerald-500 rounded" /> Latency</span>
         <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-blue-500 rounded" /> Bandwidth</span>
+        {!readOnly && <span className="ml-auto text-[10px] text-muted-foreground/70">Drag handles or bar to set work area · Double-click to reset</span>}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[100px] rounded-md border border-border bg-muted/20">
+      <svg
+        viewBox={`0 0 ${W} ${TOTAL_H}`}
+        className={`w-full rounded-md border border-border bg-muted/20 ${readOnly ? '' : 'select-none'}`}
+        style={{ height: TOTAL_H + 20 }}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+      >
+        {/* ── Work area bar (top strip) ── */}
+        {/* Inactive region — left */}
+        <rect x={minX} y={2} width={Math.max(0, wStartX - minX)} height={BAR_H - 4} rx={2}
+          fill="currentColor" opacity={0.06} />
+        {/* Inactive region — right */}
+        <rect x={wEndX} y={2} width={Math.max(0, maxX - wEndX)} height={BAR_H - 4} rx={2}
+          fill="currentColor" opacity={0.06} />
+        {/* Active work area */}
+        <rect x={wStartX} y={2} width={Math.max(0, wEndX - wStartX)} height={BAR_H - 4} rx={2}
+          fill="#3b82f6" opacity={0.18}
+          className={readOnly ? '' : 'cursor-grab active:cursor-grabbing'}
+          onPointerDown={e => onPointerDown(e, 'bar')}
+          onDoubleClick={handleBarDoubleClick} />
+        {/* Left handle */}
+        {!readOnly && (
+          <rect x={wStartX - HANDLE_W / 2} y={1} width={HANDLE_W} height={BAR_H - 2} rx={2}
+            fill="#3b82f6" opacity={0.7} className="cursor-ew-resize"
+            onPointerDown={e => onPointerDown(e, 'left')} />
+        )}
+        {/* Right handle */}
+        {!readOnly && (
+          <rect x={wEndX - HANDLE_W / 2} y={1} width={HANDLE_W} height={BAR_H - 2} rx={2}
+            fill="#3b82f6" opacity={0.7} className="cursor-ew-resize"
+            onPointerDown={e => onPointerDown(e, 'right')} />
+        )}
+        {/* Work area label */}
+        <text x={(wStartX + wEndX) / 2} y={BAR_H / 2 + 1} fontSize={8} fill="#3b82f6" textAnchor="middle" dominantBaseline="middle" opacity={0.9} fontWeight={600}>
+          {workLabel}
+        </text>
+        {/* Work area vertical guides into chart */}
+        {workStartMs > 0 && (
+          <line x1={wStartX} y1={BAR_H} x2={wStartX} y2={TOTAL_H - PAD}
+            stroke="#3b82f6" strokeWidth={1} strokeDasharray="4,2" opacity={0.35} />
+        )}
+        {activeWorkEnd < totalMs && (
+          <line x1={wEndX} y1={BAR_H} x2={wEndX} y2={TOTAL_H - PAD}
+            stroke="#3b82f6" strokeWidth={1} strokeDasharray="4,2" opacity={0.35} />
+        )}
+
+        {/* ── Chart area (below bar) ── */}
+        {/* Dimmed out-of-work-area overlay */}
+        {workStartMs > 0 && (
+          <rect x={minX} y={BAR_H} width={Math.max(0, wStartX - minX)} height={CHART_H} fill="currentColor" opacity={0.04} />
+        )}
+        {activeWorkEnd < totalMs && (
+          <rect x={wEndX} y={BAR_H} width={Math.max(0, maxX - wEndX)} height={CHART_H} fill="currentColor" opacity={0.04} />
+        )}
         {/* Grid lines */}
-        <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="currentColor" strokeOpacity={0.1} />
-        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="currentColor" strokeOpacity={0.1} />
-        {/* Current step indicator */}
-        <line x1={curX} y1={PAD} x2={curX} y2={H - PAD} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3,2" opacity={0.7} />
+        <line x1={minX} y1={BAR_H + PAD} x2={minX} y2={TOTAL_H - PAD} stroke="currentColor" strokeOpacity={0.1} />
+        <line x1={minX} y1={TOTAL_H - PAD} x2={maxX} y2={TOTAL_H - PAD} stroke="currentColor" strokeOpacity={0.1} />
+        {/* Playhead */}
+        {curX != null && (
+          <line x1={curX} y1={BAR_H + PAD} x2={curX} y2={TOTAL_H - PAD}
+            stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3,2" opacity={0.7} />
+        )}
         {/* Latency line */}
         {latPath && <path d={latPath} fill="none" stroke="#10b981" strokeWidth={1.5} strokeLinejoin="round" />}
         {/* Bandwidth line */}
         {bwPath && <path d={bwPath} fill="none" stroke="#3b82f6" strokeWidth={1.5} strokeLinejoin="round" />}
         {/* Step dividers */}
-        {steps.map((s, i) => (
-          <line key={i} x1={xFor(s.offset_ms)} y1={PAD} x2={xFor(s.offset_ms)} y2={H - PAD}
+        {steps.map((s: TimelineStep, i: number) => (
+          <line key={i} x1={msToX(s.offset_ms)} y1={BAR_H + PAD} x2={msToX(s.offset_ms)} y2={TOTAL_H - PAD}
             stroke="currentColor" strokeOpacity={i === currentIndex ? 0.4 : 0.08} strokeWidth={i === currentIndex ? 1 : 0.5} />
         ))}
         {/* Axis labels */}
-        <text x={PAD} y={H - 6} fontSize={8} fill="currentColor" opacity={0.4}>0s</text>
-        <text x={W - PAD} y={H - 6} fontSize={8} fill="currentColor" opacity={0.4} textAnchor="end">{(totalMs / 1000).toFixed(0)}s</text>
-        <text x={4} y={PAD + 3} fontSize={7} fill="#10b981" opacity={0.6}>{maxLat}ms</text>
-        <text x={W - 4} y={PAD + 3} fontSize={7} fill="#3b82f6" opacity={0.6} textAnchor="end">{maxBw > 1000 ? `${(maxBw / 1000).toFixed(0)}M` : `${maxBw}k`}</text>
+        <text x={minX} y={TOTAL_H - 6} fontSize={8} fill="currentColor" opacity={0.4}>0s</text>
+        <text x={maxX} y={TOTAL_H - 6} fontSize={8} fill="currentColor" opacity={0.4} textAnchor="end">{(totalMs / 1000).toFixed(0)}s</text>
+        <text x={4} y={BAR_H + PAD + 3} fontSize={7} fill="#10b981" opacity={0.6}>{maxLat}ms</text>
+        <text x={W - 4} y={BAR_H + PAD + 3} fontSize={7} fill="#3b82f6" opacity={0.6} textAnchor="end">{maxBw > 1000 ? `${(maxBw / 1000).toFixed(0)}M` : `${maxBw}k`}</text>
       </svg>
     </div>
   )
