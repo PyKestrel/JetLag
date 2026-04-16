@@ -41,15 +41,20 @@ def _compute_totals(steps: list[dict]) -> tuple[int, int]:
 
 
 def _validate_steps(steps: list[dict]) -> list[dict]:
-    """Validate and normalise imported step data."""
+    """Validate and normalise imported step data.
+
+    Handles values from all collector platforms (Windows, macOS, Linux).
+    Float RTTs (e.g. 42.5 from macOS/Linux) are rounded to int.
+    Extra keys (e.g. 'timestamp') are silently stripped.
+    """
     if not steps:
         raise HTTPException(status_code=400, detail="Scenario must have at least one step")
 
     prev_offset = -1
     cleaned = []
     for i, raw in enumerate(steps):
-        offset = int(raw.get("offset_ms", 0))
-        duration = int(raw.get("duration_ms", 1000))
+        offset = int(round(float(raw.get("offset_ms", 0))))
+        duration = int(round(float(raw.get("duration_ms", 1000))))
         if duration < 1000:
             raise HTTPException(
                 status_code=400,
@@ -65,10 +70,10 @@ def _validate_steps(steps: list[dict]) -> list[dict]:
             "step_index": i,
             "offset_ms": offset,
             "duration_ms": duration,
-            "latency_ms": int(raw.get("latency_ms", 0)),
-            "jitter_ms": int(raw.get("jitter_ms", 0)),
-            "packet_loss_percent": float(raw.get("packet_loss_percent", 0.0)),
-            "bandwidth_kbps": int(raw.get("bandwidth_kbps", 0)),
+            "latency_ms": int(round(float(raw.get("latency_ms", 0)))),
+            "jitter_ms": int(round(float(raw.get("jitter_ms", 0)))),
+            "packet_loss_percent": round(float(raw.get("packet_loss_percent", 0.0)), 2),
+            "bandwidth_kbps": int(round(float(raw.get("bandwidth_kbps", 0)))),
         })
     return cleaned
 

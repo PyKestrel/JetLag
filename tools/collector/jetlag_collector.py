@@ -2,32 +2,50 @@
 """
 JetLag Network Impairment Collector
 
-Windows CLI tool that collects real-world network impairment data and outputs
-replay scenario files compatible with the JetLag Replay Engine.
+Cross-platform CLI tool (Windows, macOS, Linux) that collects real-world
+network impairment data and outputs replay scenario files compatible with
+the JetLag Replay Engine.
 
 Usage:
     python jetlag_collector.py --target 8.8.8.8 --duration 60
     python jetlag_collector.py --target 1.1.1.1 --duration 300 --interval 5 --bw-method http
     python jetlag_collector.py --target 10.0.1.1 --duration 120 --bw-method iperf3 --iperf3-server 10.0.1.1
 """
-import argparse, datetime, json, math, os, re, statistics
+import argparse, datetime, json, math, os, platform, re, statistics
 import subprocess, sys, time, urllib.request, urllib.error
 from typing import Optional
+
+PLATFORM = platform.system().lower()  # 'windows', 'darwin', 'linux'
 
 DEFAULT_HTTP_URL = "https://speed.cloudflare.com/__down?bytes=1000000"
 
 
-def ping_windows(target: str, count: int = 4, timeout_ms: int = 2000) -> dict:
-    """Run ping on Windows and parse output for latency, jitter, loss."""
+def ping_host(target: str, count: int = 4, timeout_ms: int = 2000) -> dict:
+    """Run ping and parse output for latency, jitter, loss. Works on Windows, macOS, Linux."""
     try:
-        r = subprocess.run(
-            ["ping", "-n", str(count), "-w", str(timeout_ms), target],
-            capture_output=True, text=True, timeout=30,
-        )
+        if PLATFORM == 'windows':
+            cmd = ["ping", "-n", str(count), "-w", str(timeout_ms), target]
+        else:
+            # macOS and Linux: -c for count, -W for timeout (seconds)
+            timeout_sec = max(1, timeout_ms // 1000)
+            cmd = ["ping", "-c", str(count), "-W", str(timeout_sec), target]
+
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         out = r.stdout
-        rtts = [float(m.group(1)) for m in re.finditer(r'time[<=](\d+)ms', out, re.I)]
-        loss_m = re.search(r'\((\d+)%\s*(loss|perdidos)', out, re.I)
+
+        # Parse RTTs — covers all platforms:
+        #   Windows:  "time=42ms" or "time<1ms"
+        #   macOS:    "time=42.123 ms"
+        #   Linux:    "time=42.1 ms"
+        rtts = [float(m.group(1)) for m in re.finditer(r'time[<=](\d+(?:\.\d+)?)\s*ms', out, re.I)]
+
+        # Parse packet loss — covers all platforms:
+        #   Windows:  "(25% loss)" or "(25% perdidos)"
+        #   macOS:    "25.0% packet loss" or "25% packet loss"
+        #   Linux:    "25% packet loss"
+        loss_m = re.search(r'(\d+(?:\.\d+)?)%\s*(?:loss|packet\s*loss|perdidos)', out, re.I)
         loss = float(loss_m.group(1)) if loss_m else 0.0
+
         avg = statistics.mean(rtts) if rtts else 0.0
         jit = statistics.stdev(rtts) if len(rtts) > 1 else 0.0
         return {"latency_ms": round(avg, 1), "jitter_ms": round(jit, 1),
@@ -79,6 +97,7 @@ def collect(args) -> dict:
 
     print(f"\nJetLag Network Impairment Collector")
     print(f"{'=' * 50}")
+    print(f"  Platform:   {platform.system()} ({platform.release()})")
     print(f"  Target:     {target}")
     print(f"  Duration:   {duration}s ({total} samples)")
     print(f"  Interval:   {interval}s")
@@ -91,7 +110,7 @@ def collect(args) -> dict:
         while time.monotonic() - t0 < duration:
             n += 1
             ss = time.monotonic()
-            p = ping_windows(target, count=args.ping_count)
+            p = ping_host(target, count=args.ping_count)
             bw = 0
             if args.bw_method == "http":
                 bw = measure_bw_http(args.http_url)
