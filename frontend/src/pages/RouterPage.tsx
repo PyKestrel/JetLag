@@ -1,14 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Plus,
   Trash2,
   RefreshCw,
-  Router,
-  Network,
   Globe,
   Cpu,
   HardDrive,
-  X,
   CheckCircle2,
   AlertTriangle,
 } from 'lucide-react'
@@ -28,33 +26,112 @@ import {
   getDhcpReservations,
   addDhcpReservation,
   deleteDhcpReservation,
+  getLldpNeighbors,
+  getRouterSummary,
   type StaticRoute,
   type NatRule,
   type DHCPReservation,
+  type LldpNeighbor,
+  type RouterSummaryData,
 } from '@/lib/api'
+import { ROUTER_TABS, type RouterTab } from './router/routerTabs'
+import RouterSummary from './router/RouterSummary'
 
-type Tab = 'routes' | 'nat' | 'interfaces' | 'arp' | 'sysctl' | 'dhcp'
+const VALID_TABS = new Set<RouterTab>(ROUTER_TABS.map((t) => t.key))
 
-const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { key: 'routes', label: 'Routes', icon: Router },
-  { key: 'nat', label: 'NAT', icon: Globe },
-  { key: 'interfaces', label: 'Interfaces', icon: Network },
-  { key: 'arp', label: 'ARP Table', icon: Cpu },
-  { key: 'sysctl', label: 'Sysctl', icon: HardDrive },
-  { key: 'dhcp', label: 'DHCP Reservations', icon: Network },
-]
+function parseTabParam(s: string | null): RouterTab {
+  if (!s || s === 'summary') return 'summary'
+  if (s === 'routes') return 'l3' // legacy tab id before revamp
+  if (VALID_TABS.has(s as RouterTab)) return s as RouterTab
+  return 'summary'
+}
 
 export default function RouterPage() {
-  const [tab, setTab] = useState<Tab>('routes')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = useMemo(() => parseTabParam(searchParams.get('tab')), [searchParams])
+
+  const setTab = useCallback(
+    (t: RouterTab) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (t === 'summary') next.delete('tab')
+          else next.set('tab', t)
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setSearchParams],
+  )
+
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [summary, setSummary] = useState<RouterSummaryData | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(true)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+
+  const loadSummary = useCallback(() => {
+    setSummaryLoading(true)
+    setSummaryError(null)
+    getRouterSummary()
+      .then(setSummary)
+      .catch((e) => setSummaryError(e instanceof Error ? e.message : 'Failed to load summary'))
+      .finally(() => setSummaryLoading(false))
+  }, [])
+
+  useEffect(() => {
+    loadSummary()
+  }, [loadSummary])
+
+  // Keep URL in sync: legacy `routes` → `l3`; unknown `tab` values → drop (we show Summary)
+  useEffect(() => {
+    const raw = searchParams.get('tab')
+    if (!raw) return
+    if (raw === 'routes') {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('tab', 'l3')
+          return next
+        },
+        { replace: true },
+      )
+      return
+    }
+    if (raw !== 'summary' && parseTabParam(raw) === 'summary') {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('tab')
+          return next
+        },
+        { replace: true },
+      )
+    }
+  }, [searchParams, setSearchParams])
 
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-[22px] font-semibold text-foreground">Router Management</h1>
+        <h1 className="text-[22px] font-semibold text-foreground">Router</h1>
         <p className="text-[14px] text-muted-foreground mt-1">
-          Manage routing, NAT, interfaces, ARP, kernel parameters, and DHCP reservations.
+          Layer 3, NAT, interfaces, LLDP/CDP, DHCP reservations, and diagnostics for this appliance.
         </p>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2 mb-4">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[16px] font-semibold text-foreground truncate">
+            {summaryLoading && !summary ? '…' : summary?.hostname ?? 'Appliance'}
+          </span>
+          <span className="shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">
+            Online
+          </span>
+        </div>
+        {summary?.primary_mac && (
+          <span className="text-[12px] font-mono text-muted-foreground">{summary.primary_mac}</span>
+        )}
+        <span className="text-[12px] text-muted-foreground">Configuration: local</span>
       </div>
 
       {msg && (
@@ -66,30 +143,40 @@ export default function RouterPage() {
         </div>
       )}
 
-      {/* Tab bar */}
-      <div className="flex border-b border-border mb-4 gap-0">
-        {TABS.map((t) => (
+      <div className="flex flex-wrap border-b border-border mb-4 gap-0">
+        {ROUTER_TABS.map((t) => (
           <button
             key={t.key}
+            type="button"
             onClick={() => setTab(t.key)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 sm:px-4 py-2.5 text-[13px] font-medium border-b-2 transition-colors ${
               tab === t.key
                 ? 'border-primary text-primary'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
-            <t.icon className="h-3.5 w-3.5" />
+            <t.icon className="h-3.5 w-3.5 shrink-0" />
             {t.label}
           </button>
         ))}
       </div>
 
-      {tab === 'routes' && <RoutesTab setMsg={setMsg} />}
+      {tab === 'summary' && (
+        <RouterSummary
+          data={summary}
+          loading={summaryLoading}
+          error={summaryError}
+          onRefresh={loadSummary}
+          onSelectTab={setTab}
+        />
+      )}
+      {tab === 'l3' && <RoutesTab setMsg={setMsg} />}
       {tab === 'nat' && <NatTab setMsg={setMsg} />}
-      {tab === 'interfaces' && <InterfacesTab setMsg={setMsg} />}
+      {tab === 'interfaces' && <InterfacesTab />}
+      {tab === 'neighbors' && <NeighborsTab />}
+      {tab === 'dhcp' && <DhcpTab setMsg={setMsg} />}
       {tab === 'arp' && <ArpTab setMsg={setMsg} />}
       {tab === 'sysctl' && <SysctlTab setMsg={setMsg} />}
-      {tab === 'dhcp' && <DhcpTab setMsg={setMsg} />}
     </div>
   )
 }
@@ -359,7 +446,7 @@ function NatTab({ setMsg }: { setMsg: (m: { type: 'success' | 'error'; text: str
 
 // ── Interfaces Tab ──────────────────────────────────────────────
 
-function InterfacesTab({ setMsg }: { setMsg: (m: { type: 'success' | 'error'; text: string } | null) => void }) {
+function InterfacesTab() {
   const [interfaces, setInterfaces] = useState<unknown[]>([])
   const load = () => { getInterfaces().then((r) => setInterfaces(r.interfaces)).catch(() => {}) }
   useEffect(load, [])
@@ -378,6 +465,101 @@ function InterfacesTab({ setMsg }: { setMsg: (m: { type: 'success' | 'error'; te
             ? 'No interfaces (or not running on Linux)'
             : JSON.stringify(interfaces, null, 2)}
         </pre>
+      </div>
+    </div>
+  )
+}
+
+// ── LLDP / CDP Neighbors Tab ────────────────────────────────────
+
+function NeighborsTab() {
+  const [rows, setRows] = useState<LldpNeighbor[]>([])
+  const [available, setAvailable] = useState(true)
+  const [hint, setHint] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const load = () => {
+    getLldpNeighbors()
+      .then((r) => {
+        setRows(r.items)
+        setAvailable(r.available !== false)
+        setHint(r.message || null)
+        setErr(r.error || null)
+      })
+      .catch((e) => {
+        setRows([])
+        setErr(e instanceof Error ? e.message : 'Failed to load neighbors')
+        setHint(null)
+      })
+  }
+  useEffect(load, [])
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-[15px] font-semibold text-foreground">Link-layer neighbors</h2>
+          <p className="text-[12px] text-muted-foreground mt-0.5">
+            Data from <span className="font-mono">lldpd</span> (LLDP; CDP/EDP/FDP when enabled in lldpd). Install and run the{' '}
+            <span className="font-mono">lldpd</span> service on the appliance to populate this table.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          className="inline-flex items-center gap-1.5 px-3 py-[7px] text-[13px] font-medium rounded-md border border-border bg-card hover:bg-accent transition-colors shrink-0"
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
+      </div>
+
+      {!available && hint && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 text-[13px]">{hint}</div>
+      )}
+      {available && err && (
+        <div className="rounded-md border border-red-200 bg-red-50 text-red-800 px-3 py-2 text-[13px]">{err}</div>
+      )}
+      {available && hint && !err && (
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-muted-foreground">{hint}</div>
+      )}
+
+      <div className="bg-card border border-border rounded-md overflow-x-auto">
+        <table className="w-full text-left min-w-[720px]">
+          <thead>
+            <tr className="border-b border-border text-[12px] text-muted-foreground uppercase tracking-wider">
+              <th className="px-4 py-3 font-medium">Local interface</th>
+              <th className="px-4 py-3 font-medium">Protocol</th>
+              <th className="px-4 py-3 font-medium">Remote system</th>
+              <th className="px-4 py-3 font-medium">Remote port</th>
+              <th className="px-4 py-3 font-medium">Chassis ID</th>
+              <th className="px-4 py-3 font-medium">Mgmt IP</th>
+              <th className="px-4 py-3 font-medium">Age</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && !err && available && (
+              <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-[13px] text-muted-foreground">
+                  No neighbors discovered yet
+                </td>
+              </tr>
+            )}
+            {rows.map((n, i) => (
+              <tr key={`${n.local_interface}-${n.protocol}-${i}`} className="border-b border-border last:border-0 hover:bg-accent/50">
+                <td className="px-4 py-3 text-[13px] font-mono text-foreground">{n.local_interface || '—'}</td>
+                <td className="px-4 py-3 text-[13px] text-foreground">{n.protocol || '—'}</td>
+                <td className="px-4 py-3 text-[13px] text-foreground">{n.system_name || '—'}</td>
+                <td className="px-4 py-3 text-[13px] text-foreground">
+                  {n.port_id || '—'}
+                  {n.port_description ? <span className="block text-[11px] text-muted-foreground">{n.port_description}</span> : null}
+                </td>
+                <td className="px-4 py-3 text-[13px] font-mono text-muted-foreground">{n.chassis_id || '—'}</td>
+                <td className="px-4 py-3 text-[13px] font-mono text-foreground">{n.management_ip || '—'}</td>
+                <td className="px-4 py-3 text-[13px] text-muted-foreground whitespace-nowrap">{n.age || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )

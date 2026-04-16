@@ -221,6 +221,25 @@ export interface DHCPReservation {
   id: number; mac_address: string; ip_address: string; hostname: string | null; comment: string | null;
 }
 
+/** GET /api/router/summary — appliance snapshot for the Router Summary tab. */
+export interface RouterSummaryData {
+  hostname: string;
+  uptime_seconds: number | null;
+  version: string;
+  primary_ipv4: string | null;
+  primary_interface: string | null;
+  primary_mac: string | null;
+  dnsmasq: { running: boolean; status?: string; note?: string };
+  counts: {
+    static_routes: number;
+    nat_rules: number;
+    dhcp_reservations: number;
+    arp_entries: number;
+  };
+}
+
+export const getRouterSummary = () => request<RouterSummaryData>('/router/summary');
+
 export const getKernelRoutes = () => request<{ routes: unknown[] }>('/router/routes');
 export const getStaticRoutes = () => request<{ items: StaticRoute[] }>('/router/routes/static');
 export const addStaticRoute = (data: Partial<StaticRoute>) =>
@@ -275,6 +294,26 @@ export interface PortalConfigUpdate {
 export const getPortalConfig = () => request<PortalConfigData>('/portal/config');
 export const updatePortalConfig = (data: PortalConfigUpdate) =>
   request<{ message: string; portal_type: string }>('/portal/config', { method: 'PUT', body: JSON.stringify(data) });
+
+/** LLDP/CDP neighbor row (from lldpd via GET /api/router/neighbors). */
+export interface LldpNeighbor {
+  local_interface: string | null;
+  protocol: string | null;
+  age: string | null;
+  chassis_id: string | null;
+  system_name: string | null;
+  port_id: string | null;
+  port_description: string | null;
+  management_ip: string | null;
+}
+
+export const getLldpNeighbors = () =>
+  request<{
+    items: LldpNeighbor[];
+    available?: boolean;
+    message?: string | null;
+    error?: string | null;
+  }>('/router/neighbors');
 
 export const getDhcpReservations = () => request<{ items: DHCPReservation[] }>('/router/dhcp/reservations');
 export const addDhcpReservation = (data: Partial<DHCPReservation>) =>

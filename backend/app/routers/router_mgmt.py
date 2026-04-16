@@ -5,12 +5,16 @@ Provides endpoints for:
   - Custom NAT rules
   - Interface management
   - ARP / neighbor table
+  - LLDP/CDP neighbor discovery (via lldpd / lldpctl)
   - Sysctl settings
   - DHCP reservations
 """
 import asyncio
+import json
 import logging
-from typing import Optional
+import shutil
+from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -21,6 +25,8 @@ from app.database import get_db
 from app.models.static_route import StaticRoute
 from app.models.nat_rule import NatRule
 from app.models.dhcp_reservation import DHCPReservation
+from app.services.dnsmasq import DnsmasqService
+from app.version import get_version
 
 logger = logging.getLogger("jetlag.router_mgmt")
 router = APIRouter(prefix="/api/router", tags=["router"])
@@ -36,6 +42,128 @@ async def _run(cmd: str) -> tuple[str, str, int]:
     return out.decode().strip(), err.decode().strip(), proc.returncode
 
 
+def _first_global_ipv4_on_iface(iface: dict[str, Any]) -> Optional[str]:
+    for ai in iface.get("addr_info") or []:
+        if ai.get("family") != "inet":
+            continue
+        local = ai.get("local")
+        if not local or str(local).startswith("127."):
+            continue
+        if str(local).startswith("169.254."):
+            continue
+        return str(local)
+    return None
+
+
+def _read_mac_sync(dev: str) -> Optional[str]:
+    if not dev or not all(c.isalnum() or c in "._@-" for c in dev):
+        return None
+    try:
+        p = Path(f"/sys/class/net/{dev}/address")
+        if not p.is_file():
+            return None
+        return p.read_text().strip()
+    except OSError:
+        return None
+
+
+async def _detect_primary_uplink() -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Best-effort primary interface, IPv4, and MAC (default route, else first non-loopback IPv4)."""
+    out, _, rc = await _run("ip -j route show default")
+    dev: Optional[str] = None
+    if rc == 0 and out:
+        try:
+            routes = json.loads(out)
+            if isinstance(routes, list) and routes:
+                dev = routes[0].get("dev")
+        except json.JSONDecodeError:
+            pass
+
+    out2, _, rc2 = await _run("ip -j addr show")
+    if rc2 != 0 or not out2:
+        mac = _read_mac_sync(dev) if dev else None
+        return dev, None, mac
+
+    try:
+        ifaces = json.loads(out2)
+    except json.JSONDecodeError:
+        mac = _read_mac_sync(dev) if dev else None
+        return dev, None, mac
+
+    if not isinstance(ifaces, list):
+        return dev, None, _read_mac_sync(dev) if dev else None
+
+    if dev:
+        for iface in ifaces:
+            if iface.get("ifname") == dev:
+                ipv4 = _first_global_ipv4_on_iface(iface)
+                mac = _read_mac_sync(dev)
+                return dev, ipv4, mac
+
+    for iface in ifaces:
+        name = iface.get("ifname")
+        if not name or name == "lo":
+            continue
+        ipv4 = _first_global_ipv4_on_iface(iface)
+        if ipv4:
+            mac = _read_mac_sync(str(name))
+            return str(name), ipv4, mac
+
+    return None, None, None
+
+
+async def _uptime_seconds() -> Optional[float]:
+    try:
+        raw = Path("/proc/uptime").read_text()
+        return float(raw.split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+# ── Summary (dashboard) ─────────────────────────────────────────
+
+@router.get("/summary")
+async def router_summary(db: AsyncSession = Depends(get_db)):
+    """Aggregated appliance status for the Router UI Summary tab."""
+    hostname_out, _, hn_rc = await _run("uname -n")
+    hostname = hostname_out if hn_rc == 0 and hostname_out else "unknown"
+
+    uptime_sec = await _uptime_seconds()
+    primary_if, primary_ipv4, primary_mac = await _detect_primary_uplink()
+
+    static_n = (await db.execute(select(func.count(StaticRoute.id)))).scalar() or 0
+    nat_n = (await db.execute(select(func.count(NatRule.id)))).scalar() or 0
+    dhcp_n = (await db.execute(select(func.count(DHCPReservation.id)))).scalar() or 0
+
+    arp_n = 0
+    arp_out, _, arp_rc = await _run("ip -j neigh show")
+    if arp_rc == 0 and arp_out:
+        try:
+            neigh = json.loads(arp_out)
+            if isinstance(neigh, list):
+                arp_n = len(neigh)
+        except json.JSONDecodeError:
+            arp_n = len([l for l in arp_out.splitlines() if l.strip()])
+
+    dnsmasq = await DnsmasqService.status()
+
+    return {
+        "hostname": hostname,
+        "uptime_seconds": uptime_sec,
+        "version": get_version(),
+        "primary_ipv4": primary_ipv4,
+        "primary_interface": primary_if,
+        "primary_mac": primary_mac,
+        "dnsmasq": dnsmasq,
+        "counts": {
+            "static_routes": int(static_n),
+            "nat_rules": int(nat_n),
+            "dhcp_reservations": int(dhcp_n),
+            "arp_entries": arp_n,
+        },
+    }
+
+
 # ── Routing Table ────────────────────────────────────────────────
 
 @router.get("/routes")
@@ -44,7 +172,6 @@ async def list_routes():
     out, err, rc = await _run("ip -j route show")
     if rc != 0:
         return {"routes": [], "error": err}
-    import json
     try:
         return {"routes": json.loads(out)}
     except Exception:
@@ -191,7 +318,6 @@ async def list_interfaces():
     out, err, rc = await _run("ip -j addr show")
     if rc != 0:
         return {"interfaces": [], "error": err}
-    import json
     try:
         return {"interfaces": json.loads(out)}
     except Exception:
@@ -230,7 +356,6 @@ async def list_arp():
     out, err, rc = await _run("ip -j neigh show")
     if rc != 0:
         return {"entries": [], "error": err}
-    import json
     try:
         return {"entries": json.loads(out)}
     except Exception:
@@ -244,6 +369,112 @@ async def flush_arp():
     if rc != 0:
         raise HTTPException(500, f"Failed to flush ARP: {err}")
     return {"message": "ARP cache flushed"}
+
+
+# ── LLDP / CDP neighbors (lldpd) ────────────────────────────────
+
+
+def _lldp_value(node: Any) -> Optional[str]:
+    """Extract display string from lldpctl JSON nodes (string or {type, value})."""
+    if node is None:
+        return None
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        if "value" in node:
+            v = node.get("value")
+            if isinstance(v, dict):
+                return _lldp_value(v)
+            return str(v) if v is not None else None
+        if "id" in node:
+            return _lldp_value(node.get("id"))
+    return None
+
+
+def _iter_lldp_interface_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect neighbor rows from lldpctl -f json / json0 output."""
+    lldp = payload.get("lldp")
+    if not isinstance(lldp, dict):
+        return []
+    raw = lldp.get("interface")
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for ent in raw:
+        if isinstance(ent, dict):
+            out.append(ent)
+    return out
+
+
+def _neighbor_row(ent: dict[str, Any]) -> dict[str, Any]:
+    chassis = ent.get("chassis") if isinstance(ent.get("chassis"), dict) else {}
+    port = ent.get("port") if isinstance(ent.get("port"), dict) else {}
+    chassis_id = _lldp_value(chassis.get("id")) if chassis else None
+    system_name = _lldp_value(chassis.get("name")) if chassis else None
+    if not system_name and chassis:
+        system_name = _lldp_value(chassis.get("descr"))
+    port_id = _lldp_value(port.get("id")) if port else None
+    port_descr = _lldp_value(port.get("descr")) if port else None
+    mgmt = ent.get("mgmt-ip") or ent.get("mgmt_ip")
+    if isinstance(mgmt, dict):
+        mgmt = _lldp_value(mgmt)
+    elif mgmt is not None:
+        mgmt = str(mgmt)
+    return {
+        "local_interface": ent.get("name"),
+        "protocol": ent.get("via"),
+        "age": ent.get("age"),
+        "chassis_id": chassis_id,
+        "system_name": system_name,
+        "port_id": port_id,
+        "port_description": port_descr,
+        "management_ip": mgmt,
+    }
+
+
+@router.get("/neighbors")
+async def list_lldp_neighbors():
+    """Return LLDP/CDP/FDP/EDP neighbors from lldpd (lldpctl).
+
+    Requires the ``lldpd`` package and a running ``lldpd`` daemon. CDP and
+    other discovery protocols are included when supported by the lldpd build
+    and enabled (see lldpd documentation / ``/etc/default/lldpd``).
+    """
+    if not shutil.which("lldpctl"):
+        return {
+            "items": [],
+            "available": False,
+            "error": None,
+            "message": "lldpctl not found. Install lldpd (e.g. apt install lldpd) and start the lldpd service.",
+        }
+
+    out, err, rc = await _run("lldpctl -f json0")
+    if rc != 0:
+        out, err, rc = await _run("lldpctl -f json")
+    if rc != 0:
+        return {
+            "items": [],
+            "available": True,
+            "error": err or "lldpctl failed",
+            "message": "Is the lldpd daemon running?",
+        }
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {
+            "items": [],
+            "available": True,
+            "error": "Invalid JSON from lldpctl",
+            "message": err or None,
+        }
+
+    items = [_neighbor_row(e) for e in _iter_lldp_interface_entries(data)]
+    return {"items": items, "available": True, "error": None, "message": None}
 
 
 # ── Sysctl ──────────────────────────────────────────────────────
