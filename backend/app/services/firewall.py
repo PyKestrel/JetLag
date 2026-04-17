@@ -140,12 +140,18 @@ table inet jetlag {{
         else:
             logger.info(f"Client {ip} ({mac}) added to authenticated set")
 
-        # Flush conntrack entries for this client so stale DNAT mappings
-        # from captive-portal interception don't corrupt post-auth traffic
-        # (fixes ERR_QUIC_PROTOCOL_ERROR / stale NAT for HTTPS)
-        ct_cmd = f"conntrack -D -s {ip} 2>/dev/null; conntrack -D -d {ip} 2>/dev/null"
-        await FirewallService._run(ct_cmd)
-        logger.debug(f"Flushed conntrack entries for {ip}")
+        # Schedule a deferred conntrack flush so stale DNAT mappings from
+        # captive-portal interception don't corrupt post-auth traffic.
+        # The flush is delayed because the auth response itself travels on a
+        # DNAT'd connection; flushing immediately would destroy that NAT
+        # mapping and prevent the redirect URL from reaching the browser.
+        async def _deferred_ct_flush():
+            await asyncio.sleep(2)
+            ct_cmd = f"conntrack -D -s {ip} 2>/dev/null; conntrack -D -d {ip} 2>/dev/null"
+            await FirewallService._run(ct_cmd)
+            logger.debug(f"Flushed conntrack entries for {ip}")
+
+        asyncio.create_task(_deferred_ct_flush())
 
     @staticmethod
     async def intercept_client(ip: str, mac: Optional[str] = None):
