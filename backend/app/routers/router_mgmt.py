@@ -10,8 +10,10 @@ Provides endpoints for:
   - DHCP reservations
 """
 import asyncio
+import ipaddress
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -30,6 +32,10 @@ from app.version import get_version
 
 logger = logging.getLogger("jetlag.router_mgmt")
 router = APIRouter(prefix="/api/router", tags=["router"])
+
+# Validation patterns for shell-injected parameters
+_IFACE_RE = re.compile(r'^[a-zA-Z0-9._-]+$')   # safe interface names
+_SYSCTL_VAL_RE = re.compile(r'^[0-9]+$')         # sysctl values are numeric
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -334,6 +340,9 @@ class InterfaceUpdate(BaseModel):
 @router.put("/interfaces/{name}")
 async def update_interface(name: str, payload: InterfaceUpdate):
     """Modify an interface's IP, state, or MTU."""
+    if not _IFACE_RE.match(name):
+        raise HTTPException(422, f"Invalid interface name: {name}")
+
     results = []
     if payload.state in ("up", "down"):
         _, err, rc = await _run(f"ip link set {name} {payload.state}")
@@ -342,7 +351,10 @@ async def update_interface(name: str, payload: InterfaceUpdate):
         _, err, rc = await _run(f"ip link set {name} mtu {payload.mtu}")
         results.append({"action": f"set mtu {payload.mtu}", "success": rc == 0, "error": err if rc else None})
     if payload.ip_address:
-        # Flush existing and add new
+        try:
+            ipaddress.IPv4Interface(payload.ip_address)
+        except (ValueError, ipaddress.AddressValueError):
+            raise HTTPException(422, f"Invalid IP/CIDR: {payload.ip_address}")
         await _run(f"ip addr flush dev {name}")
         _, err, rc = await _run(f"ip addr add {payload.ip_address} dev {name}")
         results.append({"action": f"set ip {payload.ip_address}", "success": rc == 0, "error": err if rc else None})
@@ -510,6 +522,9 @@ async def set_sysctls(payload: SysctlUpdate):
     for key, val in payload.values.items():
         if key not in _ALLOWED_SYSCTLS:
             results[key] = {"success": False, "error": f"Not in allowlist"}
+            continue
+        if not _SYSCTL_VAL_RE.match(val):
+            results[key] = {"success": False, "error": f"Invalid value (must be numeric)"}
             continue
         _, err, rc = await _run(f"sysctl -w {key}={val}")
         results[key] = {"success": rc == 0, "error": err if rc else None}

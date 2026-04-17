@@ -269,12 +269,22 @@ async def update_scenario(
 @router.delete("/scenarios/{scenario_id}")
 async def delete_scenario(scenario_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a scenario and all its steps."""
+    from app.services.replay import ReplayService
+
     result = await db.execute(
         select(ReplayScenario).where(ReplayScenario.id == scenario_id)
     )
     scenario = result.scalar_one_or_none()
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
+
+    # Reject deletion if any active replay session is using this scenario
+    for s in ReplayService.list_active_sessions():
+        if s.scenario_id == scenario_id and s.state in ("running", "paused"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Scenario is in use by an active replay on profile {s.profile_id}",
+            )
 
     name = scenario.name
     await db.delete(scenario)
@@ -321,6 +331,13 @@ async def export_scenario(
 
 
 # ── Session control endpoints ───────────────────────────────────
+
+@router.get("/sessions/active")
+async def list_active_sessions():
+    """Return status for all in-memory replay sessions."""
+    from app.services.replay import ReplayService
+    return ReplayService.list_active_sessions()
+
 
 @router.post("/sessions/start", response_model=ReplaySessionStatus)
 async def start_session(

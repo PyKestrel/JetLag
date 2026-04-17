@@ -87,6 +87,7 @@ class ReplaySessionStart(BaseModel):
 class ReplaySessionStatus(BaseModel):
     profile_id: int
     scenario_id: Optional[int] = None
+    scenario_name: str = ""
     state: str = "idle"  # idle, running, paused, completed, stopped
     current_step_index: int = 0
     total_steps: int = 0

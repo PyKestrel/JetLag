@@ -14,6 +14,7 @@ from app.schemas.impairment_profile import (
 )
 from app.services.impairment import ImpairmentService
 from app.services.logging_service import LoggingService
+from app.services.replay import ReplayService
 
 logger = logging.getLogger("jetlag.profiles")
 
@@ -219,6 +220,10 @@ async def delete_profile(profile_id: int, db: AsyncSession = Depends(get_db)):
     profile = result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Stop any active replay session on this profile before deletion
+    await ReplayService.stop_session(profile_id)
+    ReplayService._active_sessions.pop(profile_id, None)
 
     if profile.enabled:
         await ImpairmentService.remove_profile(profile)

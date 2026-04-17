@@ -766,6 +766,7 @@ export interface ReplaySessionStart {
 export interface ReplaySessionStatus {
   profile_id: number;
   scenario_id: number | null;
+  scenario_name: string;
   state: 'idle' | 'running' | 'paused' | 'completed' | 'stopped';
   current_step_index: number;
   total_steps: number;
@@ -831,6 +832,9 @@ export const getReplaySessionStatus = (profileId: number) =>
 
 export const revertReplayProfile = (profileId: number) =>
   request<{ message: string; profile_id: number }>(`/replay/sessions/${profileId}/revert`, { method: 'POST' });
+
+export const getActiveReplaySessions = () =>
+  request<ReplaySessionStatus[]>('/replay/sessions/active');
 
 export interface ReplayHistoryEntry {
   id: number;

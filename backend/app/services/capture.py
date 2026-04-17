@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import os
+import re
 import signal
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,12 @@ from typing import Optional
 from app.config import settings
 from app.models.capture import Capture, CaptureState
 from app.schemas.capture import CaptureCreate
+
+# Patterns for validating user-supplied filter components
+_IP_RE = re.compile(r'^[\d.:a-fA-F/]+$')          # IPv4, IPv6, CIDR
+_MAC_RE = re.compile(r'^[\da-fA-F:.-]+$')           # MAC address formats
+_VLAN_RE = re.compile(r'^\d+$')                      # VLAN id
+_FILTER_SAFE_RE = re.compile(r'^[\w\s.:/()\[\]!=<>&|,\-*?@]+$')  # safe BPF chars
 
 logger = logging.getLogger("jetlag.capture")
 
@@ -27,20 +34,26 @@ class CaptureService:
         filename = f"{safe_name}_{timestamp}.pcap"
         filepath = output_dir / filename
 
-        # Build tcpdump filter expression
+        # Validate and build tcpdump filter expression
         filters = []
         if data.filter_expression:
+            if not _FILTER_SAFE_RE.match(data.filter_expression):
+                return None, "Invalid characters in filter expression"
             filters.append(data.filter_expression)
         else:
             if data.filter_ip:
+                if not _IP_RE.match(data.filter_ip):
+                    return None, "Invalid IP filter format"
                 filters.append(f"host {data.filter_ip}")
             if data.filter_vlan:
+                if not _VLAN_RE.match(str(data.filter_vlan)):
+                    return None, "Invalid VLAN filter format"
                 filters.append(f"vlan {data.filter_vlan}")
 
         filter_str = " and ".join(filters) if filters else ""
 
         iface = settings.network.lan_interface
-        cmd_parts = [
+        argv = [
             "tcpdump",
             "-i", iface,
             "-w", str(filepath),
@@ -48,20 +61,25 @@ class CaptureService:
         ]
 
         if data.filter_mac:
-            cmd_parts.extend(["-e", f"ether host {data.filter_mac}"])
+            if not _MAC_RE.match(data.filter_mac):
+                return None, "Invalid MAC filter format"
+            argv.extend(["-e"])
+            filter_parts = [f"ether host {data.filter_mac}"]
+            if filter_str:
+                filter_parts.append(filter_str)
+            filter_str = " and ".join(filter_parts)
 
         max_size = settings.captures.max_file_size_mb
-        cmd_parts.extend(["-C", str(max_size)])
+        argv.extend(["-C", str(max_size)])
 
         if filter_str:
-            cmd_parts.append(filter_str)
+            argv.append(filter_str)
 
-        cmd = " ".join(cmd_parts)
-        logger.info(f"Starting capture: {cmd}")
+        logger.info(f"Starting capture: {argv}")
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )

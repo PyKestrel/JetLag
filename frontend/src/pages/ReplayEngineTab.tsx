@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Upload, Trash2, Download, Play, Square, Pause, RotateCcw, RefreshCw,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Clock, Activity,
@@ -11,7 +11,7 @@ import {
   deleteReplayScenario, getReplayScenarioExportUrl, getProfiles,
   startReplaySession, stopReplaySession, pauseReplaySession,
   resumeReplaySession, getReplaySessionStatus, revertReplayProfile,
-  updateReplayScenario, getReplayHistory,
+  updateReplayScenario, getReplayHistory, getActiveReplaySessions,
   type ReplayScenarioListItem, type ReplayScenario, type ReplaySessionStatus,
   type ReplayHistoryEntry, type ImpairmentProfile, type PaginatedResponse,
 } from '@/lib/api'
@@ -19,7 +19,7 @@ import {
 const inputCls = "w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
 const labelCls = "text-[12px] font-medium text-muted-foreground mb-1.5 block"
 
-/** JetLag impairment collector — Python CLI for Windows (see tools/collector/README.md). */
+/** JetLag impairment collector — cross-platform Python CLI (see tools/collector/README.md). */
 const COLLECTOR_SCRIPT_URL =
   'https://raw.githubusercontent.com/PyKestrel/JetLag/main/tools/collector/jetlag_collector.py'
 const COLLECTOR_README_URL =
@@ -97,16 +97,10 @@ export default function ReplayEngineTab() {
     () => getProfiles({ page: '1', per_page: '100' }), []
   )
 
-  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null)
-  const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null)
-  const [loop, setLoop] = useState(false)
-  const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
-  const [workStartMs, setWorkStartMs] = useState(0)
-  const [workEndMs, setWorkEndMs] = useState(0)  // 0 = use full scenario length
-  const [controlError, setControlError] = useState<string | null>(null)
-  const [controlLoading, setControlLoading] = useState(false)
-  const [sessionStatus, setSessionStatus] = useState<ReplaySessionStatus | null>(null)
+  // Multi-session polling: status map keyed by profile_id
+  const [sessionMap, setSessionMap] = useState<Record<number, ReplaySessionStatus>>({})
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastRefreshRef = useRef<number>(0) // timestamp of last per-profile refresh
 
   // Step editor state
   const [editingScenario, setEditingScenario] = useState<ReplayScenario | null>(null)
@@ -115,35 +109,37 @@ export default function ReplayEngineTab() {
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
 
-  // Selected scenario full data (for timeline)
-  const [selectedScenarioData, setSelectedScenarioData] = useState<ReplayScenario | null>(null)
-  useEffect(() => {
-    if (!selectedScenarioId) { setSelectedScenarioData(null); return }
-    setWorkStartMs(0); setWorkEndMs(0)
-    getReplayScenario(selectedScenarioId).then(setSelectedScenarioData).catch(() => setSelectedScenarioData(null))
-  }, [selectedScenarioId])
-
-  const handleWorkAreaChange = (startMs: number, endMs: number) => {
-    setWorkStartMs(startMs)
-    setWorkEndMs(endMs)
-  }
-
   // History state
   const [historyPage, setHistoryPage] = useState(1)
   const { data: historyData, loading: historyLoading, refetch: refetchHistory } = useApi<PaginatedResponse<ReplayHistoryEntry>>(
     () => getReplayHistory({ page: String(historyPage), per_page: '10' }), [historyPage]
   )
 
+  // Poll all active sessions every 1s
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    if (!selectedProfileId) { setSessionStatus(null); return }
     const poll = async () => {
-      try { setSessionStatus(await getReplaySessionStatus(selectedProfileId)) } catch {}
+      // Skip this poll cycle if a per-profile refresh happened very recently
+      if (Date.now() - lastRefreshRef.current < 500) return
+      try {
+        const sessions = await getActiveReplaySessions()
+        const map: Record<number, ReplaySessionStatus> = {}
+        for (const s of sessions) map[s.profile_id] = s
+        setSessionMap(map)
+      } catch {}
     }
     poll()
     pollRef.current = setInterval(poll, 1000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [selectedProfileId])
+  }, [])
+
+  // Also poll individual profile status on demand (for freshly started sessions)
+  const refreshProfileStatus = useCallback(async (profileId: number) => {
+    try {
+      const s = await getReplaySessionStatus(profileId)
+      lastRefreshRef.current = Date.now()
+      setSessionMap(prev => ({ ...prev, [profileId]: s }))
+    } catch {}
+  }, [])
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -160,7 +156,6 @@ export default function ReplayEngineTab() {
     try {
       await deleteReplayScenario(id)
       if (expandedId === id) { setExpandedId(null); setExpandedScenario(null) }
-      if (selectedScenarioId === id) setSelectedScenarioId(null)
       await refetchScenarios()
     } catch (err) { alert(err instanceof Error ? err.message : 'Delete failed') }
   }
@@ -168,49 +163,6 @@ export default function ReplayEngineTab() {
   const toggleExpand = async (id: number) => {
     if (expandedId === id) { setExpandedId(null); setExpandedScenario(null); return }
     try { setExpandedScenario(await getReplayScenario(id)); setExpandedId(id) } catch {}
-  }
-
-  const handleStart = async () => {
-    if (!selectedProfileId || !selectedScenarioId) return
-    setControlLoading(true); setControlError(null)
-    try {
-      setSessionStatus(await startReplaySession({
-        profile_id: selectedProfileId, scenario_id: selectedScenarioId,
-        loop, playback_speed: playbackSpeed,
-        start_offset_ms: workStartMs > 0 ? workStartMs : null,
-        end_offset_ms: workEndMs > 0 ? workEndMs : null,
-      }))
-    } catch (err) { setControlError(err instanceof Error ? err.message : 'Start failed') }
-    setControlLoading(false)
-  }
-
-  const handleStop = async () => {
-    if (!selectedProfileId) return
-    setControlLoading(true)
-    try { setSessionStatus(await stopReplaySession(selectedProfileId)) }
-    catch (err) { setControlError(err instanceof Error ? err.message : 'Stop failed') }
-    setControlLoading(false)
-  }
-
-  const handlePause = async () => {
-    if (!selectedProfileId) return
-    try { setSessionStatus(await pauseReplaySession(selectedProfileId)) }
-    catch (err) { setControlError(err instanceof Error ? err.message : 'Pause failed') }
-  }
-
-  const handleResume = async () => {
-    if (!selectedProfileId) return
-    try { setSessionStatus(await resumeReplaySession(selectedProfileId)) }
-    catch (err) { setControlError(err instanceof Error ? err.message : 'Resume failed') }
-  }
-
-  const handleRevert = async () => {
-    if (!selectedProfileId) return
-    if (!confirm('Revert this profile to its pre-replay static values?')) return
-    setControlLoading(true)
-    try { await revertReplayProfile(selectedProfileId); setSessionStatus(null) }
-    catch (err) { setControlError(err instanceof Error ? err.message : 'Revert failed') }
-    setControlLoading(false)
   }
 
   const openStepEditor = async (id: number) => {
@@ -253,11 +205,9 @@ export default function ReplayEngineTab() {
     setEditSaving(false)
   }
 
-  const isActive = sessionStatus && (sessionStatus.state === 'running' || sessionStatus.state === 'paused')
-
   return (
     <div className="space-y-6">
-      {/* Windows collector — download scenario builder for use on a PC */}
+      {/* JetLag Collector — download scenario builder for use on any desktop */}
       <div className="rounded-lg border border-border overflow-hidden bg-card">
         <div className="bg-muted/40 px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex gap-3 min-w-0">
@@ -265,9 +215,9 @@ export default function ReplayEngineTab() {
               <Laptop className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-[14px] font-semibold text-foreground">Windows collector</h3>
+              <h3 className="text-[14px] font-semibold text-foreground">JetLag Collector</h3>
               <p className="text-[12px] text-muted-foreground mt-1 max-w-xl leading-relaxed">
-                Download the Python CLI that records real-world latency, jitter, packet loss, and bandwidth on a Windows machine. It writes replay scenarios you can import below. Requires Python 3.8+; optional iperf3 for bandwidth tests.
+                Download the Python CLI that records real-world latency, jitter, packet loss, and bandwidth on Windows, macOS, or Linux. It writes replay scenarios you can import below. Requires Python 3.8+; optional iperf3 for bandwidth tests.
               </p>
             </div>
           </div>
@@ -418,9 +368,7 @@ export default function ReplayEngineTab() {
                       expandedData={expandedId === s.id ? expandedScenario : null}
                       onToggleExpand={() => toggleExpand(s.id)}
                       onDelete={() => handleDelete(s.id, s.name)}
-                      onSelect={() => setSelectedScenarioId(s.id)}
-                      onEdit={() => openStepEditor(s.id)}
-                      isSelected={selectedScenarioId === s.id} />
+                      onEdit={() => openStepEditor(s.id)} />
                   ))}
                 </tbody>
               </table>
@@ -445,184 +393,29 @@ export default function ReplayEngineTab() {
         )}
       </div>
 
-      {/* ═══ B. Replay Controls ═══ */}
-      <div className="rounded-lg border border-border overflow-hidden">
-        <div className="bg-muted/40 px-5 py-3 border-b border-border">
-          <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
-            <Activity className="h-4 w-4" /> Replay Controls
-          </h3>
-        </div>
-        <div className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Target Profile</label>
-              <select value={selectedProfileId ?? ''} onChange={e => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)} className={inputCls}>
-                <option value="">Select a profile...</option>
-                {profileData?.items.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} {p.enabled ? '(active)' : ''}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelCls}>Scenario</label>
-              <select value={selectedScenarioId ?? ''} onChange={e => setSelectedScenarioId(e.target.value ? Number(e.target.value) : null)} className={inputCls}>
-                <option value="">Select a scenario...</option>
-                {scenarioData?.items.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.step_count} steps, {fmtDur(s.total_duration_ms)})</option>
-                ))}
-              </select>
-            </div>
+      {/* ═══ B. Profile Replay Cards ═══ */}
+      <div>
+        <h2 className="text-[15px] font-semibold text-foreground mb-4 flex items-center gap-2">
+          <Activity className="h-4 w-4" /> Profile Replay Cards
+          {profileData && <span className="text-[13px] font-normal text-muted-foreground">({profileData.total})</span>}
+        </h2>
+        {profileData && profileData.items.length === 0 && (
+          <div className="rounded-lg border border-border p-8 text-center text-[13px] text-muted-foreground">
+            No impairment profiles found. Create a profile first.
           </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Playback Speed</label>
-              <div className="flex items-center gap-1">
-                {[0.5, 1, 2, 5, 10].map(s => (
-                  <button key={s} type="button" onClick={() => setPlaybackSpeed(s)}
-                    className={`px-2 py-2 text-[12px] font-medium rounded-md border transition-colors ${playbackSpeed === s ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-muted-foreground hover:bg-accent'}`}>
-                    {s}x
-                  </button>
-                ))}
-                <input type="number" min={0.1} max={20} step={0.1} value={playbackSpeed}
-                  onChange={e => { const v = parseFloat(e.target.value); if (v >= 0.1 && v <= 20) setPlaybackSpeed(v) }}
-                  className="w-16 px-2 py-2 rounded-md border border-input bg-background text-foreground text-[12px] text-center focus:outline-none focus:ring-2 focus:ring-ring"
-                  title="Custom speed (0.1-20x)" />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>Mode</label>
-              <button type="button" onClick={() => setLoop(!loop)}
-                className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-[13px] font-medium transition-colors ${loop ? 'border-primary bg-primary/5 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'}`}>
-                <Repeat className="h-3.5 w-3.5" /> {loop ? 'Loop' : 'Single'}
-              </button>
-            </div>
-          </div>
-
-          {/* ═══ Work Area Timeline (interactive) ═══ */}
-          {selectedScenarioData && selectedScenarioData.steps.length > 0 && (
-            <WorkAreaTimeline
-              steps={selectedScenarioData.steps}
-              workStartMs={workStartMs}
-              workEndMs={workEndMs}
-              onWorkAreaChange={handleWorkAreaChange}
+        )}
+        <div className="space-y-3">
+          {profileData?.items.map(profile => (
+            <ProfileReplayCard
+              key={profile.id}
+              profile={profile}
+              scenarios={scenarioData?.items ?? []}
+              sessionStatus={sessionMap[profile.id] ?? null}
+              onStatusChange={() => refreshProfileStatus(profile.id)}
             />
-          )}
-
-          {controlError && (
-            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[12px] text-red-800 flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" />
-              <span>{controlError}</span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 pt-2">
-            {!isActive ? (
-              <button onClick={handleStart} disabled={!selectedProfileId || !selectedScenarioId || controlLoading}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors">
-                {controlLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                Start Replay
-              </button>
-            ) : (
-              <>
-                {sessionStatus?.state === 'running' ? (
-                  <button onClick={handlePause} className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-md bg-amber-500 text-white hover:bg-amber-600 transition-colors">
-                    <Pause className="h-3.5 w-3.5" /> Pause
-                  </button>
-                ) : (
-                  <button onClick={handleResume} className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">
-                    <Play className="h-3.5 w-3.5" /> Resume
-                  </button>
-                )}
-                <button onClick={handleStop} disabled={controlLoading}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors">
-                  <Square className="h-3.5 w-3.5" /> Stop
-                </button>
-              </>
-            )}
-            {sessionStatus?.has_snapshot && !isActive && (
-              <button onClick={handleRevert} disabled={controlLoading}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-md border border-border bg-card hover:bg-accent disabled:opacity-50 transition-colors">
-                <RotateCcw className="h-3.5 w-3.5" /> Revert to Static
-              </button>
-            )}
-          </div>
+          ))}
         </div>
       </div>
-
-      {/* ═══ C. Live Status ═══ */}
-      {sessionStatus && sessionStatus.state !== 'idle' && (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <div className="bg-muted/40 px-5 py-3 border-b border-border flex items-center justify-between">
-            <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
-              <Clock className="h-4 w-4" /> Live Status
-            </h3>
-            <StateBadge state={sessionStatus.state} />
-          </div>
-          <div className="p-5 space-y-4">
-            {/* Progress bar */}
-            <div>
-              <div className="flex items-center justify-between text-[12px] text-muted-foreground mb-1.5">
-                <span>Step {sessionStatus.current_step_index + 1} / {sessionStatus.total_steps}</span>
-                <span>{fmtDur(sessionStatus.elapsed_ms)} / {fmtDur(sessionStatus.total_ms)}</span>
-              </div>
-              <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                <div className={`h-full rounded-full transition-all duration-500 ${sessionStatus.state === 'running' ? 'bg-emerald-500' : sessionStatus.state === 'paused' ? 'bg-amber-500' : 'bg-blue-500'}`}
-                  style={{ width: `${sessionStatus.total_ms > 0 ? Math.min(100, (sessionStatus.elapsed_ms / sessionStatus.total_ms) * 100) : 0}%` }} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                {sessionStatus.loop && (
-                  <div className="flex items-center gap-2 text-[12px]">
-                    <Repeat className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">Loop count:</span>
-                    <span className="font-medium text-foreground">{sessionStatus.loop_count}</span>
-                  </div>
-                )}
-                <div className="flex items-center gap-2 text-[12px]">
-                  <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-muted-foreground">Speed:</span>
-                  <span className="font-medium text-foreground">{sessionStatus.playback_speed}x</span>
-                </div>
-              </div>
-
-              {sessionStatus.current_values && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-md border border-border p-2.5 text-center">
-                    <div className="text-[11px] text-muted-foreground">Latency</div>
-                    <div className="text-[15px] font-semibold text-foreground font-mono">{sessionStatus.current_values.latency_ms}ms</div>
-                  </div>
-                  <div className="rounded-md border border-border p-2.5 text-center">
-                    <div className="text-[11px] text-muted-foreground">Jitter</div>
-                    <div className="text-[15px] font-semibold text-foreground font-mono">{sessionStatus.current_values.jitter_ms}ms</div>
-                  </div>
-                  <div className="rounded-md border border-border p-2.5 text-center">
-                    <div className="text-[11px] text-muted-foreground">Loss</div>
-                    <div className="text-[15px] font-semibold text-foreground font-mono">{sessionStatus.current_values.packet_loss_percent}%</div>
-                  </div>
-                  <div className="rounded-md border border-border p-2.5 text-center">
-                    <div className="text-[11px] text-muted-foreground">Bandwidth</div>
-                    <div className="text-[15px] font-semibold text-foreground font-mono">{fmtBw(sessionStatus.current_values.bandwidth_kbps)}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* ═══ D. Visual Timeline ═══ */}
-            {selectedScenarioData && selectedScenarioData.steps.length > 0 && (
-              <WorkAreaTimeline
-                steps={selectedScenarioData.steps}
-                currentIndex={sessionStatus.current_step_index}
-                workStartMs={workStartMs}
-                workEndMs={workEndMs}
-                readOnly
-              />
-            )}
-          </div>
-        </div>
-      )}
 
       {/* ═══ E. Replay History ═══ */}
       <div className="rounded-lg border border-border overflow-hidden">
@@ -699,26 +492,24 @@ export default function ReplayEngineTab() {
 }
 
 /* ── Scenario table row with expand ── */
-function ScenarioRow({ scenario, expanded, expandedData, onToggleExpand, onDelete, onSelect, onEdit, isSelected }: {
+function ScenarioRow({ scenario, expanded, expandedData, onToggleExpand, onDelete, onEdit }: {
   scenario: ReplayScenarioListItem
   expanded: boolean
   expandedData: ReplayScenario | null
   onToggleExpand: () => void
   onDelete: () => void
-  onSelect: () => void
   onEdit: () => void
-  isSelected: boolean
 }) {
   return (
     <>
-      <tr className={`hover:bg-muted/30 transition-colors ${isSelected ? 'bg-primary/5' : ''}`}>
+      <tr className="hover:bg-muted/30 transition-colors">
         <td className="px-4 py-2.5">
           <button onClick={onToggleExpand} className="p-0.5 rounded hover:bg-accent transition-colors">
             {expanded ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
           </button>
         </td>
         <td className="px-4 py-2.5">
-          <button onClick={onSelect} className="text-[13px] font-medium text-primary hover:underline text-left">{scenario.name}</button>
+          <span className="text-[13px] font-medium text-foreground">{scenario.name}</span>
           {scenario.description && <p className="text-[12px] text-muted-foreground mt-0.5 truncate max-w-[250px]">{scenario.description}</p>}
         </td>
         <td className="px-4 py-2.5 text-[13px] text-foreground capitalize">{scenario.default_direction}</td>
@@ -949,6 +740,288 @@ function WorkAreaTimeline({ steps, currentIndex, workStartMs, workEndMs, onWorkA
         <text x={4} y={BAR_H + PAD + 3} fontSize={7} fill="#10b981" opacity={0.6}>{maxLat}ms</text>
         <text x={W - 4} y={BAR_H + PAD + 3} fontSize={7} fill="#3b82f6" opacity={0.6} textAnchor="end">{maxBw > 1000 ? `${(maxBw / 1000).toFixed(0)}M` : `${maxBw}k`}</text>
       </svg>
+    </div>
+  )
+}
+
+/* ── Profile Replay Card ── */
+interface ProfileReplayCardProps {
+  profile: ImpairmentProfile
+  scenarios: ReplayScenarioListItem[]
+  sessionStatus: ReplaySessionStatus | null
+  onStatusChange: () => void
+}
+
+function ProfileReplayCard({ profile, scenarios, sessionStatus, onStatusChange }: ProfileReplayCardProps) {
+  const [expanded, setExpanded] = useState(false)
+  const [scenarioId, setScenarioId] = useState<number | null>(null)
+  const [loop, setLoop] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
+  const [workStartMs, setWorkStartMs] = useState(0)
+  const [workEndMs, setWorkEndMs] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [scenarioData, setScenarioData] = useState<ReplayScenario | null>(null)
+
+  const state = sessionStatus?.state ?? 'idle'
+  const isActive = state === 'running' || state === 'paused'
+
+  // Auto-expand when active
+  useEffect(() => { if (isActive) setExpanded(true) }, [isActive])
+
+  // Fetch full scenario data when scenario changes
+  useEffect(() => {
+    if (!scenarioId) { setScenarioData(null); return }
+    setWorkStartMs(0); setWorkEndMs(0)
+    getReplayScenario(scenarioId).then(setScenarioData).catch(() => setScenarioData(null))
+  }, [scenarioId])
+
+  const handleStart = async () => {
+    if (!scenarioId) return
+    setLoading(true); setError(null)
+    try {
+      await startReplaySession({
+        profile_id: profile.id, scenario_id: scenarioId,
+        loop, playback_speed: playbackSpeed,
+        start_offset_ms: workStartMs > 0 ? workStartMs : null,
+        end_offset_ms: workEndMs > 0 ? workEndMs : null,
+      })
+      onStatusChange()
+    } catch (err) { setError(err instanceof Error ? err.message : 'Start failed') }
+    setLoading(false)
+  }
+
+  const handleStop = async () => {
+    if (loading) return
+    setLoading(true)
+    try { await stopReplaySession(profile.id); onStatusChange() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Stop failed') }
+    setLoading(false)
+  }
+
+  const handlePause = async () => {
+    if (loading) return
+    setLoading(true)
+    try { await pauseReplaySession(profile.id); onStatusChange() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Pause failed') }
+    setLoading(false)
+  }
+
+  const handleResume = async () => {
+    if (loading) return
+    setLoading(true)
+    try { await resumeReplaySession(profile.id); onStatusChange() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Resume failed') }
+    setLoading(false)
+  }
+
+  const handleRevert = async () => {
+    if (!confirm('Revert this profile to its pre-replay static values?')) return
+    setLoading(true)
+    try { await revertReplayProfile(profile.id); onStatusChange() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Revert failed') }
+    setLoading(false)
+  }
+
+  return (
+    <div className={`rounded-lg border overflow-hidden transition-colors ${isActive ? 'border-primary/40 bg-primary/[0.02]' : 'border-border bg-card'}`}>
+      {/* ── Card Header ── */}
+      <button type="button" onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors text-left">
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-foreground truncate">{profile.name}</span>
+          {profile.enabled && (
+            <span className="inline-flex items-center text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0">active</span>
+          )}
+          <StateBadge state={state} />
+        </div>
+        {/* Quick status when collapsed and active */}
+        {!expanded && isActive && sessionStatus && (
+          <div className="flex items-center gap-3 text-[12px] text-muted-foreground">
+            <span>{sessionStatus.scenario_name}</span>
+            <span className="font-mono">{fmtDur(sessionStatus.elapsed_ms)} / {fmtDur(sessionStatus.total_ms)}</span>
+            <div className="w-24 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${state === 'running' ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                style={{ width: `${sessionStatus.total_ms > 0 ? Math.min(100, (sessionStatus.elapsed_ms / sessionStatus.total_ms) * 100) : 0}%` }} />
+            </div>
+          </div>
+        )}
+        {/* Quick transport when collapsed and active */}
+        {!expanded && isActive && (
+          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+            {state === 'running' ? (
+              <button onClick={handlePause} disabled={loading} className="p-1.5 rounded hover:bg-accent transition-colors disabled:opacity-50" title="Pause">
+                <Pause className="h-3.5 w-3.5 text-amber-600" />
+              </button>
+            ) : (
+              <button onClick={handleResume} disabled={loading} className="p-1.5 rounded hover:bg-accent transition-colors disabled:opacity-50" title="Resume">
+                <Play className="h-3.5 w-3.5 text-emerald-600" />
+              </button>
+            )}
+            <button onClick={handleStop} disabled={loading} className="p-1.5 rounded hover:bg-accent transition-colors disabled:opacity-50" title="Stop">
+              <Square className="h-3.5 w-3.5 text-red-500" />
+            </button>
+          </div>
+        )}
+        {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+
+      {/* ── Expanded Body ── */}
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 space-y-4 border-t border-border">
+          {/* Scenario + Speed + Loop */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className={labelCls}>Scenario</label>
+              <select value={scenarioId ?? ''} disabled={isActive}
+                onChange={e => setScenarioId(e.target.value ? Number(e.target.value) : null)} className={inputCls}>
+                <option value="">Select...</option>
+                {scenarios.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.step_count} steps, {fmtDur(s.total_duration_ms)})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Speed</label>
+              <div className="flex items-center gap-0.5">
+                {[0.5, 1, 2, 5, 10].map(s => (
+                  <button key={s} type="button" disabled={isActive} onClick={() => setPlaybackSpeed(s)}
+                    className={`px-1.5 py-1.5 text-[11px] font-medium rounded border transition-colors ${playbackSpeed === s ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-muted-foreground hover:bg-accent'} disabled:opacity-50`}>
+                    {s}x
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Mode</label>
+              <button type="button" disabled={isActive} onClick={() => setLoop(!loop)}
+                className={`w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded border text-[12px] font-medium transition-colors ${loop ? 'border-primary bg-primary/5 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'} disabled:opacity-50`}>
+                <Repeat className="h-3 w-3" /> {loop ? 'Loop' : 'Single'}
+              </button>
+            </div>
+          </div>
+
+          {/* Work Area Timeline */}
+          {scenarioData && scenarioData.steps.length > 0 && !isActive && (
+            <WorkAreaTimeline
+              steps={scenarioData.steps}
+              workStartMs={workStartMs}
+              workEndMs={workEndMs}
+              onWorkAreaChange={(s, e) => { setWorkStartMs(s); setWorkEndMs(e) }}
+            />
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-2.5 text-[12px] text-red-800 flex items-start gap-2">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-red-500" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Transport buttons */}
+          <div className="flex items-center gap-2">
+            {!isActive ? (
+              <button onClick={handleStart} disabled={!scenarioId || loading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                Start
+              </button>
+            ) : (
+              <>
+                {state === 'running' ? (
+                  <button onClick={handlePause} disabled={loading} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors">
+                    <Pause className="h-3.5 w-3.5" /> Pause
+                  </button>
+                ) : (
+                  <button onClick={handleResume} disabled={loading} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                    <Play className="h-3.5 w-3.5" /> Resume
+                  </button>
+                )}
+                <button onClick={handleStop} disabled={loading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors">
+                  <Square className="h-3.5 w-3.5" /> Stop
+                </button>
+              </>
+            )}
+            {sessionStatus?.has_snapshot && !isActive && (
+              <button onClick={handleRevert} disabled={loading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md border border-border bg-card hover:bg-accent disabled:opacity-50 transition-colors">
+                <RotateCcw className="h-3.5 w-3.5" /> Revert
+              </button>
+            )}
+          </div>
+
+          {/* Live Status (when active) */}
+          {isActive && sessionStatus && (
+            <div className="space-y-3 pt-2 border-t border-border">
+              {/* Progress bar */}
+              <div>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
+                  <span>Step {sessionStatus.current_step_index + 1} / {sessionStatus.total_steps}</span>
+                  <span>{fmtDur(sessionStatus.elapsed_ms)} / {fmtDur(sessionStatus.total_ms)}</span>
+                </div>
+                <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full transition-all duration-500 ${state === 'running' ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                    style={{ width: `${sessionStatus.total_ms > 0 ? Math.min(100, (sessionStatus.elapsed_ms / sessionStatus.total_ms) * 100) : 0}%` }} />
+                </div>
+              </div>
+
+              {/* Meta row */}
+              <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
+                {sessionStatus.loop && (
+                  <span className="flex items-center gap-1"><Repeat className="h-3 w-3" /> Loop {sessionStatus.loop_count}</span>
+                )}
+                <span className="flex items-center gap-1"><Activity className="h-3 w-3" /> {sessionStatus.playback_speed}x</span>
+                {sessionStatus.scenario_name && (
+                  <span className="flex items-center gap-1"><FileJson className="h-3 w-3" /> {sessionStatus.scenario_name}</span>
+                )}
+              </div>
+
+              {/* Current impairment values */}
+              {sessionStatus.current_values && (
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="rounded border border-border p-2 text-center">
+                    <div className="text-[10px] text-muted-foreground">Latency</div>
+                    <div className="text-[14px] font-semibold text-foreground font-mono">{sessionStatus.current_values.latency_ms}ms</div>
+                  </div>
+                  <div className="rounded border border-border p-2 text-center">
+                    <div className="text-[10px] text-muted-foreground">Jitter</div>
+                    <div className="text-[14px] font-semibold text-foreground font-mono">{sessionStatus.current_values.jitter_ms}ms</div>
+                  </div>
+                  <div className="rounded border border-border p-2 text-center">
+                    <div className="text-[10px] text-muted-foreground">Loss</div>
+                    <div className="text-[14px] font-semibold text-foreground font-mono">{sessionStatus.current_values.packet_loss_percent}%</div>
+                  </div>
+                  <div className="rounded border border-border p-2 text-center">
+                    <div className="text-[10px] text-muted-foreground">Bandwidth</div>
+                    <div className="text-[14px] font-semibold text-foreground font-mono">{fmtBw(sessionStatus.current_values.bandwidth_kbps)}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Active timeline (read-only) */}
+              {scenarioData && scenarioData.steps.length > 0 && (
+                <WorkAreaTimeline
+                  steps={scenarioData.steps}
+                  currentIndex={sessionStatus.current_step_index}
+                  workStartMs={workStartMs}
+                  workEndMs={workEndMs}
+                  readOnly
+                />
+              )}
+            </div>
+          )}
+
+          {/* Completed / stopped status (non-idle, non-active) */}
+          {!isActive && state !== 'idle' && sessionStatus && (
+            <div className="text-[12px] text-muted-foreground flex items-center gap-2 pt-1">
+              <StateBadge state={state} />
+              <span>{fmtDur(sessionStatus.elapsed_ms)} played · {sessionStatus.current_step_index + 1}/{sessionStatus.total_steps} steps</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

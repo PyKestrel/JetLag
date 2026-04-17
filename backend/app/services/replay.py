@@ -35,6 +35,7 @@ class ReplaySession:
     """In-memory state for a running replay."""
     profile_id: int
     scenario_id: int
+    scenario_name: str = ""
     loop: bool = False
     playback_speed: float = 1.0
     state: str = "idle"  # idle, running, paused, completed, stopped
@@ -44,6 +45,8 @@ class ReplaySession:
     elapsed_ms: int = 0
     loop_count: int = 0
     start_time: float = 0.0
+    pause_accumulated_ms: int = 0
+    pause_started_at: float = 0.0
     snapshot: Optional[dict] = None
     task: Optional[asyncio.Task] = None
     pause_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -130,6 +133,7 @@ class ReplayService:
         session = ReplaySession(
             profile_id=profile_id,
             scenario_id=scenario_id,
+            scenario_name=scenario.name,
             loop=data.loop,
             playback_speed=data.playback_speed,
             state="running",
@@ -183,6 +187,8 @@ class ReplayService:
             while True:
                 session.start_time = time.monotonic()
                 session.elapsed_ms = 0
+                session.pause_accumulated_ms = 0
+                session.pause_started_at = 0.0
 
                 for i, step in enumerate(steps):
                     # Check for cancellation
@@ -238,8 +244,8 @@ class ReplayService:
                     sleep_s = (step["duration_ms"] / 1000.0) / session.playback_speed
                     await asyncio.sleep(sleep_s)
 
-                    # Update elapsed time
-                    session.elapsed_ms = int((time.monotonic() - session.start_time) * 1000)
+                    # Update elapsed time (subtract accumulated pause duration)
+                    session.elapsed_ms = int((time.monotonic() - session.start_time) * 1000) - session.pause_accumulated_ms
 
                 # End of steps
                 if session.loop:
@@ -253,12 +259,14 @@ class ReplayService:
                     return
 
         except asyncio.CancelledError:
-            session.state = "stopped"
-            await cls._record_history(session)
+            if session.state != "stopped":
+                session.state = "stopped"
+                await cls._record_history(session)
             logger.info(f"Replay cancelled on profile {profile_id}")
         except Exception as exc:
-            session.state = "stopped"
-            await cls._record_history(session)
+            if session.state != "stopped":
+                session.state = "stopped"
+                await cls._record_history(session)
             logger.error(f"Replay error on profile {profile_id}: {exc}")
 
     @classmethod
@@ -317,6 +325,10 @@ class ReplayService:
             except (asyncio.CancelledError, Exception):
                 pass
 
+        # Record history here since the CancelledError handler skips it
+        # when state is already "stopped"
+        await cls._record_history(session)
+
         logger.info(f"Replay stopped on profile {profile_id}")
         return cls.get_status(profile_id)
 
@@ -328,6 +340,7 @@ class ReplayService:
             return cls.get_status(profile_id)
 
         session.state = "paused"
+        session.pause_started_at = time.monotonic()
         session.pause_event.clear()
         logger.info(f"Replay paused on profile {profile_id}")
         return cls.get_status(profile_id)
@@ -340,6 +353,9 @@ class ReplayService:
             return cls.get_status(profile_id)
 
         session.state = "running"
+        if session.pause_started_at > 0:
+            session.pause_accumulated_ms += int((time.monotonic() - session.pause_started_at) * 1000)
+            session.pause_started_at = 0.0
         session.pause_event.set()
         logger.info(f"Replay resumed on profile {profile_id}")
         return cls.get_status(profile_id)
@@ -351,13 +367,17 @@ class ReplayService:
         if not session:
             return ReplaySessionStatus(profile_id=profile_id, state="idle")
 
-        # Update elapsed if running
+        # Update elapsed if running (subtract accumulated pause time)
         if session.state == "running":
-            session.elapsed_ms = int((time.monotonic() - session.start_time) * 1000)
+            session.elapsed_ms = int((time.monotonic() - session.start_time) * 1000) - session.pause_accumulated_ms
+        elif session.state == "paused" and session.pause_started_at > 0:
+            current_pause_ms = int((time.monotonic() - session.pause_started_at) * 1000)
+            session.elapsed_ms = int((time.monotonic() - session.start_time) * 1000) - session.pause_accumulated_ms - current_pause_ms
 
         return ReplaySessionStatus(
             profile_id=profile_id,
             scenario_id=session.scenario_id,
+            scenario_name=session.scenario_name,
             state=session.state,
             current_step_index=session.current_step_index,
             total_steps=session.total_steps,
@@ -369,6 +389,11 @@ class ReplayService:
             current_values=session.current_values,
             has_snapshot=session.snapshot is not None,
         )
+
+    @classmethod
+    def list_active_sessions(cls) -> list[ReplaySessionStatus]:
+        """Return status for every session that is still in memory."""
+        return [cls.get_status(pid) for pid in list(cls._active_sessions)]
 
     @classmethod
     async def revert_profile(cls, db: AsyncSession, profile_id: int) -> dict:
@@ -405,7 +430,7 @@ class ReplayService:
             await ImpairmentService.apply_profile(profile)
 
         # Clean up session
-        del cls._active_sessions[profile_id]
+        cls._active_sessions.pop(profile_id, None)
 
         logger.info(f"Profile {profile_id} reverted to pre-replay values")
         return {"message": f"Profile reverted to static values", "profile_id": profile_id}
