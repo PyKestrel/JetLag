@@ -180,6 +180,22 @@ export default function SettingsPage() {
     }
   }
 
+  const handleNewLanIpChange = (ip: string) => {
+    const parts = ip.split('.')
+    if (parts.length === 4 && parts.every((p) => p !== '' && !isNaN(Number(p)))) {
+      const prefix = parts.slice(0, 3).join('.')
+      setNewLan((prev) => ({
+        ...prev,
+        ip,
+        subnet: `${prefix}.0/24`,
+        dhcp_range_start: `${prefix}.100`,
+        dhcp_range_end: `${prefix}.250`,
+      }))
+    } else {
+      setNewLan((prev) => ({ ...prev, ip }))
+    }
+  }
+
   const handleRemoveLan = async (iface: string) => {
     if (!confirm(`Remove LAN port ${iface}?`)) return
     setPortMsg(null)
@@ -421,7 +437,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="text-[12px] font-medium text-muted-foreground mb-1 block">IP Address</label>
-                  <input type="text" value={newLan.ip} onChange={(e) => setNewLan({ ...newLan, ip: e.target.value })} placeholder="10.0.2.1" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                  <input type="text" value={newLan.ip} onChange={(e) => handleNewLanIpChange(e.target.value)} placeholder="10.0.2.1" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Subnet</label>

@@ -1,4 +1,6 @@
+import logging
 import os
+import platform
 from pathlib import Path
 
 import yaml
@@ -21,6 +23,8 @@ from app.config import (
     PortDHCPConfig,
     load_config,
 )
+
+logger = logging.getLogger("jetlag.settings")
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -114,7 +118,35 @@ async def update_settings(payload: SettingsUpdate):
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
+    # Apply LAN interface changes on Linux when lan_ports were updated
+    services_reloaded: list[str] = []
+    if payload.lan_ports is not None and settings.setup_completed and platform.system() == "Linux":
+        from app.routers.setup import _configure_lan_port
+        from app.services.dnsmasq import DnsmasqService
+        from app.services.firewall import FirewallService
+
+        for lp in settings.lan_ports:
+            try:
+                await _configure_lan_port(lp)
+                services_reloaded.append(f"lan:{lp.effective_interface}")
+            except Exception as e:
+                logger.error(f"Failed to configure LAN port {lp.effective_interface}: {e}")
+
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+            services_reloaded.append("dnsmasq")
+        except Exception as e:
+            logger.error(f"Failed to reload dnsmasq after settings update: {e}")
+
+        try:
+            await FirewallService.initialize()
+            services_reloaded.append("nftables")
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after settings update: {e}")
+
     return {
         "message": "Settings updated successfully",
+        "services_reloaded": services_reloaded,
         **config_data,
     }

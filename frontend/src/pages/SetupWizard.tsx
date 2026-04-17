@@ -56,6 +56,23 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [hotspotChannel, setHotspotChannel] = useState(6)
   const [hotspotHidden, setHotspotHidden] = useState(false)
 
+  // Auto-infer related fields when the user types a LAN IP
+  const inferFromIp = (ip: string) => {
+    // Only infer when we have a plausible IPv4 with at least 3 octets
+    const parts = ip.split('.')
+    if (parts.length === 4 && parts.every((p) => p !== '' && !isNaN(Number(p)))) {
+      const prefix = parts.slice(0, 3).join('.')
+      setLanSubnet(`${prefix}.0/24`)
+      setDhcpStart(`${prefix}.100`)
+      setDhcpEnd(`${prefix}.250`)
+    }
+  }
+
+  const handleLanIpChange = (ip: string) => {
+    setLanIp(ip)
+    inferFromIp(ip)
+  }
+
   // Deploy state
   const [deploying, setDeploying] = useState(false)
   const [deployError, setDeployError] = useState<string | null>(null)
@@ -474,7 +491,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 <div>
                   <label className="text-[12px] font-medium text-muted-foreground mb-1.5 block">LAN IP address</label>
                   <input
-                    type="text" value={lanIp} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLanIp(e.target.value)}
+                    type="text" value={lanIp} onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleLanIpChange(e.target.value)}
                     className="w-full px-3 py-2 rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                 </div>

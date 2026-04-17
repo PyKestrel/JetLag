@@ -298,11 +298,24 @@ def _persist_config():
 
 
 async def _configure_lan_port(lp: LANPort):
-    """Configure a single LAN port (or VLAN sub-interface) on Linux."""
+    """Configure a single LAN port (or VLAN sub-interface) on Linux.
+
+    Steps:
+      1. Tell NetworkManager to stop managing the interface (prevents DHCP
+         from re-acquiring an address after we flush).
+      2. Kill any dhclient process bound to the interface.
+      3. Create VLAN sub-interface if needed.
+      4. Flush all addresses, assign the static IP, and bring the link up.
+    """
     import ipaddress as _ip
     iif = lp.effective_interface
     net = _ip.IPv4Network(lp.subnet, strict=False)
     prefix_len = net.prefixlen
+
+    # Stop NetworkManager from managing this interface (ignore errors if NM is not running)
+    await _run_cmd(f"nmcli device set {iif} managed no 2>/dev/null")
+    # Kill any dhclient that might be holding a lease on this interface
+    await _run_cmd(f"pkill -f 'dhclient.*{iif}' 2>/dev/null")
 
     # Create VLAN sub-interface if needed
     if lp.vlan_id is not None:
