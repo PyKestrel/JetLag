@@ -9,6 +9,7 @@ logger = logging.getLogger("jetlag.dnsmasq")
 
 DNSMASQ_CONF_PATH = "/etc/dnsmasq.d/jetlag.conf"
 DNSMASQ_HOSTS_DIR = "/etc/jetlag/hosts"
+DNSMASQ_CUSTOM_HOSTS = "/etc/jetlag/custom-hosts"
 
 
 class DnsmasqService:
@@ -90,6 +91,10 @@ class DnsmasqService:
             lines.append(f"server={server}")
 
         lines.append("")
+        lines.append("# Custom DNS entries (managed via API)")
+        lines.append(f"addn-hosts={DNSMASQ_CUSTOM_HOSTS}")
+
+        lines.append("")
         lines.append("# Logging")
         lines.append("log-queries")
         lines.append("log-dhcp")
@@ -106,6 +111,25 @@ class DnsmasqService:
 
         logger.info(f"dnsmasq config written to {DNSMASQ_CONF_PATH} ({len(lan_ports)} LAN ports)")
         return config_content
+
+    @staticmethod
+    async def write_custom_hosts(entries) -> str:
+        """Write custom DNS entries to the addn-hosts file.
+
+        Each entry should have .ip_address and .hostname attributes.
+        Uses standard /etc/hosts format: <ip> <hostname>
+        """
+        lines = ["# JetLag custom DNS entries — auto-generated, do not edit"]
+        for e in entries:
+            lines.append(f"{e.ip_address}\t{e.hostname}")
+        content = "\n".join(lines) + "\n"
+
+        hosts_path = Path(DNSMASQ_CUSTOM_HOSTS)
+        hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        hosts_path.write_text(content)
+
+        logger.info(f"Wrote {len(entries)} custom DNS entries to {DNSMASQ_CUSTOM_HOSTS}")
+        return content
 
     @staticmethod
     async def restart():

@@ -259,8 +259,41 @@ async def captive_portal_middleware(request: Request, call_next):
     primary_lan_ip = cfg.network.lan_ip  # fallback for redirects
 
     if host_header not in allowed_hosts:
-        # This request was DNAT'd from an unauthenticated client trying
-        # to reach the internet.  Serve the captive portal page.
+        # This request was DNAT'd — but the nftables timeout may have expired
+        # while the client is still authenticated in the DB.  Self-heal by
+        # re-adding the IP to the firewall set and redirecting back to the
+        # original destination so the browser retries cleanly.
+        client_ip = request.client.host if request.client else None
+        if client_ip:
+            try:
+                from app.database import async_session
+                from app.models.client import Client, AuthState
+                from app.services.firewall import FirewallService
+                from sqlalchemy import select
+
+                async with async_session() as db:
+                    result = await db.execute(
+                        select(Client).where(Client.ip_address == client_ip)
+                    )
+                    client = result.scalar_one_or_none()
+                    if client and client.auth_state == AuthState.AUTHENTICATED:
+                        # Re-add to nftables (refreshes 24h timeout)
+                        await FirewallService.allow_client(client.ip_address, client.mac_address)
+                        # Return a small page that waits for conntrack flush then retries.
+                        # We can't redirect immediately because the DNAT conntrack entry
+                        # is still active and would loop back here.
+                        retry_html = (
+                            "<html><head><meta charset='utf-8'>"
+                            "<title>Reconnecting...</title></head><body>"
+                            "<p>Session restored, reconnecting...</p>"
+                            "<script>setTimeout(function(){location.reload()},3000);</script>"
+                            "</body></html>"
+                        )
+                        return HTMLResponse(content=retry_html, status_code=200)
+            except Exception:
+                pass  # Fall through to portal page on any error
+
+        # Truly unauthenticated — serve the captive portal page.
         portal_file = Path(__file__).parent.parent.parent / "portal" / "index.html"
         if portal_file.exists():
             return HTMLResponse(content=portal_file.read_text(), status_code=200)

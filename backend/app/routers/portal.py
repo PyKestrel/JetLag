@@ -244,6 +244,13 @@ async def portal_status(request: Request, db: AsyncSession = Depends(get_db)):
             else:
                 session_remaining = int((expires - now).total_seconds())
 
+    # Self-heal: if DB says authenticated but nftables entry has expired,
+    # re-add the client to the firewall set (refreshes the 24h timeout)
+    if is_auth:
+        in_nft = await FirewallService.is_client_allowed(client.ip_address)
+        if not in_nft:
+            await FirewallService.allow_client(client.ip_address, client.mac_address)
+
     return {
         "authenticated": is_auth,
         "mac_address": client.mac_address,

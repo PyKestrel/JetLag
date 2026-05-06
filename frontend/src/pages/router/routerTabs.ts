@@ -8,6 +8,7 @@ import {
   Cable,
   Cpu,
   HardDrive,
+  FileText,
 } from 'lucide-react'
 
 export type RouterTab =
@@ -17,6 +18,7 @@ export type RouterTab =
   | 'interfaces'
   | 'neighbors'
   | 'dhcp'
+  | 'dns'
   | 'arp'
   | 'sysctl'
 
@@ -27,6 +29,7 @@ export const ROUTER_TABS: { key: RouterTab; label: string; icon: LucideIcon }[] 
   { key: 'interfaces', label: 'Interfaces', icon: Network },
   { key: 'neighbors', label: 'LLDP / CDP', icon: Link2 },
   { key: 'dhcp', label: 'DHCP', icon: Cable },
+  { key: 'dns', label: 'DNS', icon: FileText },
   { key: 'arp', label: 'ARP', icon: Cpu },
   { key: 'sysctl', label: 'Sysctl', icon: HardDrive },
 ]

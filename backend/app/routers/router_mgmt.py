@@ -27,6 +27,7 @@ from app.database import get_db
 from app.models.static_route import StaticRoute
 from app.models.nat_rule import NatRule
 from app.models.dhcp_reservation import DHCPReservation
+from app.models.dns_entry import DnsEntry
 from app.services.dnsmasq import DnsmasqService
 from app.version import get_version
 
@@ -585,3 +586,101 @@ async def remove_dhcp_reservation(reservation_id: int, db: AsyncSession = Depend
     except Exception as e:
         logger.error(f"Failed to regenerate dnsmasq config: {e}")
     return {"message": f"DHCP reservation {reservation_id} deleted"}
+
+
+# ── DNS Entries ────────────────────────────────────────────────
+
+class DnsEntryCreate(BaseModel):
+    hostname: str
+    ip_address: str
+    enabled: bool = True
+    comment: Optional[str] = None
+
+
+class DnsEntryUpdate(BaseModel):
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    enabled: Optional[bool] = None
+    comment: Optional[str] = None
+
+
+class DnsEntryResponse(BaseModel):
+    id: int
+    hostname: str
+    ip_address: str
+    enabled: bool
+    comment: Optional[str]
+    model_config = {"from_attributes": True}
+
+
+async def _sync_dns_entries(db: AsyncSession):
+    """Write enabled DNS entries to dnsmasq hosts file and reload."""
+    rows = (await db.execute(
+        select(DnsEntry).where(DnsEntry.enabled == True).order_by(DnsEntry.id)
+    )).scalars().all()
+    await DnsmasqService.write_custom_hosts(rows)
+    await DnsmasqService.reload()
+
+
+@router.get("/dns/entries")
+async def list_dns_entries(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(DnsEntry).order_by(DnsEntry.id))).scalars().all()
+    return {"items": [DnsEntryResponse.model_validate(r) for r in rows]}
+
+
+@router.post("/dns/entries", status_code=201)
+async def add_dns_entry(payload: DnsEntryCreate, db: AsyncSession = Depends(get_db)):
+    if not payload.hostname or not payload.ip_address:
+        raise HTTPException(422, "hostname and ip_address are required")
+    try:
+        ipaddress.ip_address(payload.ip_address)
+    except ValueError:
+        raise HTTPException(422, "Invalid IP address")
+    entry = DnsEntry(**payload.model_dump())
+    db.add(entry)
+    await db.flush()
+    await db.refresh(entry)
+    try:
+        await _sync_dns_entries(db)
+    except Exception as e:
+        logger.error(f"Failed to sync DNS entries: {e}")
+    return DnsEntryResponse.model_validate(entry)
+
+
+@router.put("/dns/entries/{entry_id}")
+async def update_dns_entry(entry_id: int, payload: DnsEntryUpdate, db: AsyncSession = Depends(get_db)):
+    entry = await db.get(DnsEntry, entry_id)
+    if not entry:
+        raise HTTPException(404, "DNS entry not found")
+    if payload.hostname is not None:
+        entry.hostname = payload.hostname
+    if payload.ip_address is not None:
+        try:
+            ipaddress.ip_address(payload.ip_address)
+        except ValueError:
+            raise HTTPException(422, "Invalid IP address")
+        entry.ip_address = payload.ip_address
+    if payload.enabled is not None:
+        entry.enabled = payload.enabled
+    if payload.comment is not None:
+        entry.comment = payload.comment
+    await db.flush()
+    await db.refresh(entry)
+    try:
+        await _sync_dns_entries(db)
+    except Exception as e:
+        logger.error(f"Failed to sync DNS entries: {e}")
+    return DnsEntryResponse.model_validate(entry)
+
+
+@router.delete("/dns/entries/{entry_id}")
+async def delete_dns_entry(entry_id: int, db: AsyncSession = Depends(get_db)):
+    entry = await db.get(DnsEntry, entry_id)
+    if not entry:
+        raise HTTPException(404, "DNS entry not found")
+    await db.delete(entry)
+    try:
+        await _sync_dns_entries(db)
+    except Exception as e:
+        logger.error(f"Failed to sync DNS entries: {e}")
+    return {"message": f"DNS entry {entry_id} deleted"}

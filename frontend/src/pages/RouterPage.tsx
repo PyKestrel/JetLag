@@ -9,6 +9,7 @@ import {
   HardDrive,
   CheckCircle2,
   AlertTriangle,
+  Pencil,
 } from 'lucide-react'
 import {
   getKernelRoutes,
@@ -26,11 +27,16 @@ import {
   getDhcpReservations,
   addDhcpReservation,
   deleteDhcpReservation,
+  getDnsEntries,
+  addDnsEntry,
+  updateDnsEntry,
+  deleteDnsEntry,
   getLldpNeighbors,
   getRouterSummary,
   type StaticRoute,
   type NatRule,
   type DHCPReservation,
+  type DnsEntry,
   type LldpNeighbor,
   type RouterSummaryData,
 } from '@/lib/api'
@@ -115,7 +121,7 @@ export default function RouterPage() {
       <div className="mb-6">
         <h1 className="text-[22px] font-semibold text-foreground">Router</h1>
         <p className="text-[14px] text-muted-foreground mt-1">
-          Layer 3, NAT, interfaces, LLDP/CDP, DHCP reservations, and diagnostics for this appliance.
+          Layer 3, NAT, interfaces, LLDP/CDP, DHCP reservations, DNS entries, and diagnostics for this appliance.
         </p>
       </div>
 
@@ -175,6 +181,7 @@ export default function RouterPage() {
       {tab === 'interfaces' && <InterfacesTab />}
       {tab === 'neighbors' && <NeighborsTab />}
       {tab === 'dhcp' && <DhcpTab setMsg={setMsg} />}
+      {tab === 'dns' && <DnsTab setMsg={setMsg} />}
       {tab === 'arp' && <ArpTab setMsg={setMsg} />}
       {tab === 'sysctl' && <SysctlTab setMsg={setMsg} />}
     </div>
@@ -672,6 +679,161 @@ function SysctlTab({ setMsg }: { setMsg: (m: { type: 'success' | 'error'; text: 
             No sysctl values available (not running on Linux)
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── DNS Entries Tab ─────────────────────────────────────────────
+
+function DnsTab({ setMsg }: { setMsg: (m: { type: 'success' | 'error'; text: string } | null) => void }) {
+  const [entries, setEntries] = useState<DnsEntry[]>([])
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [form, setForm] = useState({ hostname: '', ip_address: '', enabled: true, comment: '' })
+
+  const load = () => { getDnsEntries().then((r) => setEntries(r.items)).catch(() => {}) }
+  useEffect(load, [])
+
+  const resetForm = () => {
+    setForm({ hostname: '', ip_address: '', enabled: true, comment: '' })
+    setShowForm(false)
+    setEditingId(null)
+  }
+
+  const handleAdd = async () => {
+    if (!form.hostname || !form.ip_address) return
+    try {
+      await addDnsEntry({
+        hostname: form.hostname, ip_address: form.ip_address,
+        enabled: form.enabled, comment: form.comment || null,
+      })
+      setMsg({ type: 'success', text: 'DNS entry added (dnsmasq reloaded)' })
+      resetForm()
+      load()
+    } catch (e) {
+      setMsg({ type: 'error', text: e instanceof Error ? e.message : 'Failed' })
+    }
+  }
+
+  const handleUpdate = async () => {
+    if (editingId === null || !form.hostname || !form.ip_address) return
+    try {
+      await updateDnsEntry(editingId, {
+        hostname: form.hostname, ip_address: form.ip_address,
+        enabled: form.enabled, comment: form.comment || null,
+      })
+      setMsg({ type: 'success', text: 'DNS entry updated (dnsmasq reloaded)' })
+      resetForm()
+      load()
+    } catch (e) {
+      setMsg({ type: 'error', text: e instanceof Error ? e.message : 'Failed' })
+    }
+  }
+
+  const handleEdit = (entry: DnsEntry) => {
+    setEditingId(entry.id)
+    setForm({
+      hostname: entry.hostname,
+      ip_address: entry.ip_address,
+      enabled: entry.enabled,
+      comment: entry.comment || '',
+    })
+    setShowForm(true)
+  }
+
+  const handleToggle = async (entry: DnsEntry) => {
+    try {
+      await updateDnsEntry(entry.id, { enabled: !entry.enabled })
+      setMsg({ type: 'success', text: `DNS entry ${!entry.enabled ? 'enabled' : 'disabled'}` })
+      load()
+    } catch (e) {
+      setMsg({ type: 'error', text: e instanceof Error ? e.message : 'Failed' })
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Delete this DNS entry?')) return
+    try { await deleteDnsEntry(id); setMsg({ type: 'success', text: 'DNS entry deleted' }); load() }
+    catch (e) { setMsg({ type: 'error', text: e instanceof Error ? e.message : 'Failed' }) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[15px] font-semibold text-foreground">Custom DNS Entries</h2>
+        <button onClick={() => { resetForm(); setShowForm(true) }} className="inline-flex items-center gap-1.5 px-4 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+          <Plus className="h-3.5 w-3.5" /> Add Entry
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="bg-card border border-border rounded-md p-4 space-y-3">
+          <div className="grid grid-cols-4 gap-3">
+            <div className="space-y-1">
+              <label className="text-[12px] font-medium text-muted-foreground">Hostname</label>
+              <input type="text" value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} placeholder="myserver.local" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[12px] font-medium text-muted-foreground">IP Address</label>
+              <input type="text" value={form.ip_address} onChange={(e) => setForm({ ...form, ip_address: e.target.value })} placeholder="10.0.1.100" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[12px] font-medium text-muted-foreground">Comment</label>
+              <input type="text" value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} placeholder="Internal web server" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[12px] font-medium text-muted-foreground">Enabled</label>
+              <button
+                onClick={() => setForm({ ...form, enabled: !form.enabled })}
+                className={`w-full px-3 py-[7px] rounded-md border text-[13px] font-medium transition-colors ${form.enabled ? 'border-green-500 bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-400' : 'border-input bg-background text-muted-foreground'}`}
+              >
+                {form.enabled ? 'Yes' : 'No'}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 justify-end">
+            <button onClick={resetForm} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
+            <button onClick={editingId !== null ? handleUpdate : handleAdd} disabled={!form.hostname || !form.ip_address} className="px-4 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors">
+              {editingId !== null ? 'Save' : 'Add'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-card border border-border rounded-md">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-border text-[12px] text-muted-foreground uppercase tracking-wider">
+              <th className="px-4 py-3 font-medium">Hostname</th>
+              <th className="px-4 py-3 font-medium">IP Address</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Comment</th>
+              <th className="px-4 py-3 font-medium w-24"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-[13px] text-muted-foreground">No custom DNS entries configured</td></tr>
+            )}
+            {entries.map((e) => (
+              <tr key={e.id} className="border-b border-border last:border-0 hover:bg-accent/50">
+                <td className="px-4 py-3 text-[13px] font-mono text-foreground">{e.hostname}</td>
+                <td className="px-4 py-3 text-[13px] font-mono text-foreground">{e.ip_address}</td>
+                <td className="px-4 py-3">
+                  <button onClick={() => handleToggle(e)} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${e.enabled ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'}`}>
+                    {e.enabled ? <><CheckCircle2 className="h-3 w-3" /> Active</> : 'Disabled'}
+                  </button>
+                </td>
+                <td className="px-4 py-3 text-[13px] text-muted-foreground">{e.comment || '-'}</td>
+                <td className="px-4 py-3 flex items-center gap-1">
+                  <button onClick={() => handleEdit(e)} className="p-1 rounded hover:bg-accent text-muted-foreground transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                  <button onClick={() => handleDelete(e.id)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )

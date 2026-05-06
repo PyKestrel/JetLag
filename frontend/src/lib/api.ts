@@ -220,6 +220,9 @@ export interface NatRule {
 export interface DHCPReservation {
   id: number; mac_address: string; ip_address: string; hostname: string | null; comment: string | null;
 }
+export interface DnsEntry {
+  id: number; hostname: string; ip_address: string; enabled: boolean; comment: string | null;
+}
 
 /** GET /api/router/summary — appliance snapshot for the Router Summary tab. */
 export interface RouterSummaryData {
@@ -320,6 +323,15 @@ export const addDhcpReservation = (data: Partial<DHCPReservation>) =>
   request<DHCPReservation>('/router/dhcp/reservations', { method: 'POST', body: JSON.stringify(data) });
 export const deleteDhcpReservation = (id: number) =>
   request<{ message: string }>(`/router/dhcp/reservations/${id}`, { method: 'DELETE' });
+
+// DNS Entries
+export const getDnsEntries = () => request<{ items: DnsEntry[] }>('/router/dns/entries');
+export const addDnsEntry = (data: Omit<DnsEntry, 'id'>) =>
+  request<DnsEntry>('/router/dns/entries', { method: 'POST', body: JSON.stringify(data) });
+export const updateDnsEntry = (id: number, data: Partial<Omit<DnsEntry, 'id'>>) =>
+  request<DnsEntry>(`/router/dns/entries/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteDnsEntry = (id: number) =>
+  request<{ message: string }>(`/router/dns/entries/${id}`, { method: 'DELETE' });
 
 // Types
 export interface PaginatedResponse<T> {

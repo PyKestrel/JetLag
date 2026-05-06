@@ -131,14 +131,35 @@ table inet jetlag {{
         logger.info(f"nftables initialized: LAN={lan_ifaces}, WAN={wan_ifaces}")
 
     @staticmethod
+    async def is_client_allowed(ip: str) -> bool:
+        """Check if a client IP is currently in the nftables authenticated set."""
+        current = await FirewallService.get_authenticated_ips()
+        # Elements may be plain strings or dicts with "val" key depending on nft version
+        for elem in current:
+            if isinstance(elem, str) and elem == ip:
+                return True
+            if isinstance(elem, dict) and elem.get("val") == ip:
+                return True
+        return False
+
+    @staticmethod
     async def allow_client(ip: str, mac: Optional[str] = None):
-        """Add client IP to the authenticated set, lifting interception."""
-        cmd = f"nft add element inet jetlag authenticated_ips {{ {ip} }}"
+        """Add client IP to the authenticated set, lifting interception.
+
+        Uses 'timeout 24h' on each add so re-adding refreshes the expiry.
+        """
+        cmd = f"nft add element inet jetlag authenticated_ips {{ {ip} timeout 24h }}"
         out, err, rc = await FirewallService._run(cmd)
         if rc != 0:
-            logger.error(f"Failed to allow client {ip}: {err}")
-        else:
-            logger.info(f"Client {ip} ({mac}) added to authenticated set")
+            # Element may already exist — try delete + re-add to refresh timeout
+            await FirewallService._run(
+                f"nft delete element inet jetlag authenticated_ips {{ {ip} }}"
+            )
+            out, err, rc = await FirewallService._run(cmd)
+            if rc != 0:
+                logger.error(f"Failed to allow client {ip}: {err}")
+                return
+        logger.info(f"Client {ip} ({mac}) added to authenticated set")
 
         # Schedule a deferred conntrack flush so stale DNAT mappings from
         # captive-portal interception don't corrupt post-auth traffic.
