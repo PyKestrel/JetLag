@@ -11,7 +11,7 @@ Usage:
     python jetlag_collector.py --target 1.1.1.1 --duration 300 --interval 5 --bw-method http
     python jetlag_collector.py --target 10.0.1.1 --duration 120 --bw-method iperf3 --iperf3-server 10.0.1.1
 """
-import argparse, datetime, json, math, os, platform, re, statistics
+import argparse, datetime, json, math, os, platform, re, ssl, statistics
 import subprocess, sys, time, urllib.request, urllib.error
 from typing import Optional
 
@@ -54,12 +54,18 @@ def ping_host(target: str, count: int = 4, timeout_ms: int = 2000) -> dict:
         return {"latency_ms": 0, "jitter_ms": 0, "packet_loss_percent": 100.0}
 
 
-def measure_bw_http(url: str = DEFAULT_HTTP_URL, timeout: int = 15) -> float:
+def measure_bw_http(url: str = DEFAULT_HTTP_URL, timeout: int = 15,
+                    verify_ssl: bool = True) -> float:
     """Measure download bandwidth via HTTP GET. Returns kbps."""
     try:
+        ctx = None
+        if not verify_ssl:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={"User-Agent": "JetLag-Collector/1.0"})
         t0 = time.monotonic()
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             data = resp.read()
         elapsed = time.monotonic() - t0
         return round((len(data) * 8 / elapsed) / 1000, 1) if elapsed > 0 else 0.0
@@ -113,7 +119,7 @@ def collect(args) -> dict:
             p = ping_host(target, count=args.ping_count)
             bw = 0
             if args.bw_method == "http":
-                bw = measure_bw_http(args.http_url)
+                bw = measure_bw_http(args.http_url, verify_ssl=not args.no_verify_ssl)
             elif args.bw_method == "iperf3":
                 bw = measure_bw_iperf3(args.iperf3_server or target, args.iperf3_port)
 
@@ -183,6 +189,8 @@ def main():
     p.add_argument("--http-url", default=DEFAULT_HTTP_URL, help="URL for HTTP bandwidth test")
     p.add_argument("--iperf3-server", default=None, help="iperf3 server address (default: same as target)")
     p.add_argument("--iperf3-port", type=int, default=5201, help="iperf3 server port (default: 5201)")
+    p.add_argument("--no-verify-ssl", "-k", action="store_true", default=False,
+                   help="Disable SSL certificate verification for HTTP bandwidth tests")
     p.add_argument("--direction", default="outbound", choices=["outbound", "inbound", "both"],
                    help="Default replay direction (default: outbound)")
     p.add_argument("--name", "-n", default=None, help="Scenario name (default: auto-generated)")

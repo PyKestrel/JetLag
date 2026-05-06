@@ -1,13 +1,13 @@
 # JetLag Network Impairment Collector
 
-A standalone Windows CLI tool that collects real-world network impairment data
-(latency, jitter, packet loss, bandwidth) and outputs replay scenario files
-compatible with the JetLag Replay Engine.
+A cross-platform CLI tool (Windows, macOS, Linux) that collects real-world
+network impairment data (latency, jitter, packet loss, bandwidth) and outputs
+replay scenario files compatible with the JetLag Replay Engine.
 
 ## Requirements
 
 - Python 3.8+
-- Windows (uses `ping -n`)
+- Windows, macOS, or Linux
 - Optional: `iperf3` in PATH for iperf3 bandwidth measurement
 - Optional: `PyYAML` for YAML output (`pip install pyyaml`)
 
@@ -22,6 +22,9 @@ python jetlag_collector.py --target 1.1.1.1 --duration 300 --interval 5 --bw-met
 
 # With iperf3 bandwidth measurement
 python jetlag_collector.py --target 10.0.1.1 --duration 120 --bw-method iperf3 --iperf3-server 10.0.1.1
+
+# With HTTP bandwidth, skip SSL certificate verification
+python jetlag_collector.py --target 1.1.1.1 --duration 60 --bw-method http -k
 
 # Custom output
 python jetlag_collector.py --target 8.8.8.8 --duration 60 --format yaml --output my_scenario.yaml
@@ -39,6 +42,7 @@ python jetlag_collector.py --target 8.8.8.8 --duration 60 --format yaml --output
 | `--http-url` | Cloudflare | URL for HTTP download test |
 | `--iperf3-server` | same as target | iperf3 server address |
 | `--iperf3-port` | 5201 | iperf3 server port |
+| `--no-verify-ssl`, `-k` | false | Disable SSL certificate verification for HTTP bandwidth tests |
 | `--direction` | outbound | Default replay direction |
 | `--name`, `-n` | auto | Scenario name |
 | `--format`, `-f` | json | Output format: `json` or `yaml` |
