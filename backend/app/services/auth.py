@@ -6,8 +6,8 @@ import secrets
 from pathlib import Path
 from typing import Optional
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +17,9 @@ from app.models.user import User
 
 logger = logging.getLogger("jetlag.auth")
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _ALGORITHM = "HS256"
+# bcrypt only hashes the first 72 bytes; longer inputs raise in bcrypt>=4.
+_BCRYPT_MAX_BYTES = 72
 _SECRET_FILE = DB_DIR / ".jwt_secret"
 
 # Default seeded admin credentials (forces a password change on first login).
@@ -45,14 +46,19 @@ def _get_secret_key() -> str:
         return secrets.token_urlsafe(48)
 
 
+def _to_bcrypt_bytes(password: str) -> bytes:
+    """Encode and truncate to bcrypt's 72-byte limit (matches passlib behavior)."""
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
 def hash_password(password: str) -> str:
-    return _pwd_context.hash(password)
+    return bcrypt.hashpw(_to_bcrypt_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
-        return _pwd_context.verify(password, password_hash)
-    except ValueError:
+        return bcrypt.checkpw(_to_bcrypt_bytes(password), password_hash.encode("utf-8"))
+    except (ValueError, TypeError):
         return False
 
 
