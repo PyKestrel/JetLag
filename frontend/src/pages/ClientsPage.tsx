@@ -1,19 +1,142 @@
 import { useState, useRef, useEffect } from 'react'
-import { RefreshCw, Shield, ShieldOff, RotateCcw, Search, MoreVertical, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, Shield, ShieldOff, RotateCcw, Search, MoreVertical, ChevronLeft, ChevronRight, Gauge, X, Trash2 } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import {
   getClients,
   authenticateClient,
   deauthenticateClient,
   bulkResetClients,
+  getClientImpairment,
+  attachClientImpairment,
+  detachClientImpairment,
+  getProfiles,
   type Client,
+  type ClientImpairment,
+  type ImpairmentProfile,
   type PaginatedResponse,
 } from '@/lib/api'
 
-function ActionMenu({ client, onAuth, onDeauth, loading }: {
+function ImpairModal({ client, onClose }: { client: Client; onClose: () => void }) {
+  const [impairment, setImpairment] = useState<ClientImpairment | null>(null)
+  const [profiles, setProfiles] = useState<ImpairmentProfile[]>([])
+  const [selected, setSelected] = useState<string>('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function refresh() {
+    try {
+      const [imp, profs] = await Promise.all([
+        getClientImpairment(client.id),
+        getProfiles({ per_page: '100' }),
+      ])
+      setImpairment(imp)
+      setProfiles(profs.items)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load impairment')
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  async function handleAttach() {
+    if (!selected) return
+    setBusy(true)
+    setError(null)
+    try {
+      await attachClientImpairment(client.id, Number(selected))
+      setSelected('')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to apply profile')
+    }
+    setBusy(false)
+  }
+
+  async function handleDetach(profileId: number) {
+    setBusy(true)
+    setError(null)
+    try {
+      await detachClientImpairment(client.id, profileId)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove profile')
+    }
+    setBusy(false)
+  }
+
+  const activeIds = new Set((impairment?.profiles || []).map((p) => p.id))
+  const available = profiles.filter((p) => !activeIds.has(p.id))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div className="w-full max-w-md bg-card border border-border rounded-lg shadow-lg p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-[15px] font-semibold text-foreground flex items-center gap-2">
+            <Gauge className="h-4 w-4" /> Impairment · {client.ip_address || client.mac_address}
+          </h3>
+          <button onClick={onClose} className="p-1 rounded hover:bg-accent text-muted-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive">{error}</div>
+        )}
+
+        {!client.ip_address && (
+          <p className="text-[13px] text-amber-600 mb-3">This client has no known IP address yet.</p>
+        )}
+
+        <div className="mb-4">
+          <p className="text-[12px] font-medium text-muted-foreground mb-2">Active profiles</p>
+          {impairment && impairment.profiles.length > 0 ? (
+            <div className="space-y-1.5">
+              {impairment.profiles.map((p) => (
+                <div key={p.id} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5 text-[13px]">
+                  <span className="text-foreground">{p.name}</span>
+                  <button onClick={() => handleDetach(p.id)} disabled={busy} className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-destructive">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[13px] text-muted-foreground">No profiles applied to this client.</p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            disabled={!client.ip_address || available.length === 0}
+            className="flex-1 px-3 py-2 text-[13px] rounded-md border border-input bg-background"
+          >
+            <option value="">{available.length ? 'Select a profile…' : 'No more profiles'}</option>
+            {available.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleAttach}
+            disabled={busy || !selected}
+            className="px-3 py-2 text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ActionMenu({ client, onAuth, onDeauth, onImpair, loading }: {
   client: Client
   onAuth: (id: number) => void
   onDeauth: (id: number) => void
+  onImpair: (client: Client) => void
   loading: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -56,6 +179,13 @@ function ActionMenu({ client, onAuth, onDeauth, loading }: {
               Revoke Access
             </button>
           )}
+          <button
+            onClick={() => { onImpair(client); setOpen(false) }}
+            className="w-full text-left px-3 py-1.5 text-[13px] text-foreground hover:bg-accent transition-colors flex items-center gap-2"
+          >
+            <Gauge className="h-3.5 w-3.5 text-purple-500" />
+            Impairment…
+          </button>
         </div>
       )}
     </div>
@@ -66,6 +196,7 @@ export default function ClientsPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [actionLoading, setActionLoading] = useState<number | null>(null)
+  const [impairClient, setImpairClient] = useState<Client | null>(null)
   const { data, loading, error, refetch } = useApi<PaginatedResponse<Client>>(
     () => getClients({ page: String(page), per_page: '10' }),
     [page]
@@ -228,6 +359,7 @@ export default function ClientsPage() {
                           client={client}
                           onAuth={handleAuth}
                           onDeauth={handleDeauth}
+                          onImpair={setImpairClient}
                           loading={actionLoading === client.id}
                         />
                       </td>
@@ -264,6 +396,10 @@ export default function ClientsPage() {
             </div>
           </div>
         </>
+      )}
+
+      {impairClient && (
+        <ImpairModal client={impairClient} onClose={() => setImpairClient(null)} />
       )}
     </div>
   )

@@ -109,6 +109,11 @@ class PortalConfig(BaseModel):
 class AdminConfig(BaseModel):
     api_port: int = 8080
     frontend_port: int = 3000
+    # When True, the admin API + UI require login. Captive-portal endpoints
+    # (/api/portal/*) and health/version always stay open to LAN clients.
+    auth_enabled: bool = True
+    # Hours before an issued admin token expires.
+    token_expire_hours: int = 12
 
 
 class UpdatesConfig(BaseModel):

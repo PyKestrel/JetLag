@@ -30,3 +30,6 @@ class Client(Base):
     authenticated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=True
     )
+    # Duration (minutes) of the active session. 0 / None = unlimited.
+    # Captured at authentication time so per-plan (tiered) durations are honored.
+    session_minutes: Mapped[int] = mapped_column(Integer, nullable=True)

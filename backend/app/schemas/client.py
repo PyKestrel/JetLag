@@ -27,5 +27,6 @@ class ClientResponse(BaseModel):
     first_seen: datetime.datetime
     last_seen: datetime.datetime
     authenticated_at: Optional[datetime.datetime]
+    session_minutes: Optional[int] = None
 
     model_config = {"from_attributes": True}

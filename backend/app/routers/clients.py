@@ -1,13 +1,17 @@
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.client import Client, AuthState
+from app.models.impairment_profile import ImpairmentProfile, MatchRule
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
 from app.services.firewall import FirewallService
+from app.services.impairment import ImpairmentService
 from app.services.logging_service import LoggingService
 from app.services.dnsmasq import DnsmasqService
 from app.services.network import NetworkService
@@ -69,6 +73,7 @@ async def authenticate_client(client_id: int, db: AsyncSession = Depends(get_db)
 
     client.auth_state = AuthState.AUTHENTICATED
     client.authenticated_at = datetime.datetime.utcnow()
+    client.session_minutes = None  # admin grant = unlimited
     await db.flush()
 
     await FirewallService.allow_client(client.ip_address, client.mac_address)
@@ -88,6 +93,7 @@ async def deauthenticate_client(client_id: int, db: AsyncSession = Depends(get_d
 
     client.auth_state = AuthState.PENDING
     client.authenticated_at = None
+    client.session_minutes = None
     await db.flush()
 
     await FirewallService.intercept_client(client.ip_address, client.mac_address)
@@ -198,6 +204,7 @@ async def bulk_reset(db: AsyncSession = Depends(get_db)):
     for client in clients:
         client.auth_state = AuthState.PENDING
         client.authenticated_at = None
+        client.session_minutes = None
         if client.ip_address:
             await FirewallService.intercept_client(
                 client.ip_address, client.mac_address
@@ -207,3 +214,125 @@ async def bulk_reset(db: AsyncSession = Depends(get_db)):
     await LoggingService.log_system_event(db, "All client sessions reset (bulk)")
 
     return {"message": f"Reset {len(clients)} client(s)", "count": len(clients)}
+
+
+# ── Per-client impairment ────────────────────────────────────────
+
+class ClientImpairmentAttach(BaseModel):
+    profile_id: int
+
+
+async def _load_profile(db: AsyncSession, profile_id: int) -> ImpairmentProfile:
+    result = await db.execute(
+        select(ImpairmentProfile)
+        .options(selectinload(ImpairmentProfile.match_rules))
+        .where(ImpairmentProfile.id == profile_id)
+    )
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
+@router.get("/{client_id}/impairment")
+async def get_client_impairment(client_id: int, db: AsyncSession = Depends(get_db)):
+    """List impairment profiles currently targeting this client's IP."""
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if not client.ip_address:
+        return {"client_id": client_id, "ip_address": None, "profiles": []}
+
+    result = await db.execute(
+        select(ImpairmentProfile)
+        .join(MatchRule, MatchRule.profile_id == ImpairmentProfile.id)
+        .where(MatchRule.src_ip == client.ip_address)
+        .distinct()
+    )
+    profiles = result.scalars().all()
+    return {
+        "client_id": client_id,
+        "ip_address": client.ip_address,
+        "profiles": [{"id": p.id, "name": p.name, "enabled": p.enabled} for p in profiles],
+    }
+
+
+@router.post("/{client_id}/impairment")
+async def attach_client_impairment(
+    client_id: int,
+    payload: ClientImpairmentAttach,
+    db: AsyncSession = Depends(get_db),
+):
+    """Attach an impairment profile to a specific client by adding a src_ip
+    match rule, then enable and apply the profile."""
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if not client.ip_address:
+        raise HTTPException(status_code=400, detail="Client has no known IP address")
+
+    profile = await _load_profile(db, payload.profile_id)
+
+    # Add a match rule for this client IP if one doesn't already exist
+    existing = next(
+        (r for r in profile.match_rules if r.src_ip == client.ip_address), None
+    )
+    if not existing:
+        profile.match_rules.append(MatchRule(src_ip=client.ip_address))
+
+    profile.enabled = True
+    await db.flush()
+
+    err = await ImpairmentService.apply_profile(profile)
+    if err:
+        raise HTTPException(status_code=500, detail=f"Failed to apply impairment: {err}")
+
+    await LoggingService.log_system_event(
+        db,
+        f"Applied profile '{profile.name}' to client {client.ip_address}",
+    )
+    return {
+        "message": f"Profile '{profile.name}' applied to {client.ip_address}",
+        "profile_id": profile.id,
+        "client_id": client_id,
+    }
+
+
+@router.delete("/{client_id}/impairment/{profile_id}")
+async def detach_client_impairment(
+    client_id: int, profile_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Remove this client's src_ip match rule from a profile and re-apply."""
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    profile = await _load_profile(db, profile_id)
+
+    removed = False
+    for rule in list(profile.match_rules):
+        if rule.src_ip == client.ip_address:
+            await db.delete(rule)
+            removed = True
+    if not removed:
+        raise HTTPException(status_code=404, detail="Client is not targeted by this profile")
+
+    await db.flush()
+
+    # Reload remaining rules and re-apply (or remove entirely if none remain)
+    await db.refresh(profile, attribute_names=["match_rules"])
+    if profile.match_rules:
+        await ImpairmentService.apply_profile(profile)
+    else:
+        profile.enabled = False
+        await db.flush()
+        await ImpairmentService.remove_profile(profile)
+
+    await LoggingService.log_system_event(
+        db,
+        f"Removed profile '{profile.name}' from client {client.ip_address}",
+    )
+    return {"message": f"Profile '{profile.name}' removed from {client.ip_address}"}

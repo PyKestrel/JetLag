@@ -22,9 +22,11 @@ import {
   Router,
   Wifi,
   Radio,
+  CalendarClock,
+  LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getVersion } from '@/lib/api'
+import { getVersion, getCurrentUser, clearToken, getAuthStatus } from '@/lib/api'
 
 interface NavSection {
   label: string
@@ -59,6 +61,7 @@ const navSections: NavSection[] = [
     defaultOpen: false,
     items: [
       { to: '/profiles', label: 'Impairment Profiles', icon: Gauge },
+      { to: '/schedules', label: 'Schedules', icon: CalendarClock },
       { to: '/firewall', label: 'Firewall Rules', icon: ShieldAlert },
     ],
   },
@@ -86,6 +89,7 @@ const breadcrumbMap: Record<string, string[]> = {
   '/overview': ['Overview'],
   '/clients': ['Networks', 'Clients'],
   '/profiles': ['Traffic policies', 'Impairment Profiles'],
+  '/schedules': ['Traffic policies', 'Schedules'],
   '/firewall': ['Traffic policies', 'Firewall Rules'],
   '/router': ['Networks', 'Router'],
   '/portal': ['Networks', 'Captive Portal'],
@@ -171,12 +175,25 @@ export default function Layout() {
   const location = useLocation()
   const crumbs = breadcrumbMap[location.pathname] || ['Overview']
   const [appVersion, setAppVersion] = useState<string>('')
+  const [username, setUsername] = useState<string>('admin')
+  const [authEnabled, setAuthEnabled] = useState<boolean>(false)
 
   useEffect(() => {
     getVersion()
       .then((v) => setAppVersion(v.version))
       .catch(() => setAppVersion('unknown'))
+    getAuthStatus()
+      .then((a) => setAuthEnabled(a.auth_enabled))
+      .catch(() => setAuthEnabled(false))
+    getCurrentUser()
+      .then((u) => setUsername(u.username))
+      .catch(() => {})
   }, [])
+
+  function handleLogout() {
+    clearToken()
+    window.location.reload()
+  }
 
   return (
     <div className="flex h-screen bg-background">
@@ -206,11 +223,22 @@ export default function Layout() {
 
         {/* Bottom */}
         <div className="px-3 py-3 border-t border-[hsl(var(--sidebar-border))]">
-          <div className="flex items-center gap-2 text-[hsl(var(--sidebar-fg))]">
-            <div className="w-6 h-6 rounded-full bg-[hsl(var(--sidebar-hover))] flex items-center justify-center">
-              <User className="h-3.5 w-3.5" />
+          <div className="flex items-center justify-between gap-2 text-[hsl(var(--sidebar-fg))]">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-full bg-[hsl(var(--sidebar-hover))] flex items-center justify-center flex-shrink-0">
+                <User className="h-3.5 w-3.5" />
+              </div>
+              <span className="text-[11px] truncate">{username}</span>
             </div>
-            <span className="text-[11px]">admin</span>
+            {authEnabled && (
+              <button
+                onClick={handleLogout}
+                title="Sign out"
+                className="text-[hsl(var(--sidebar-fg))] hover:text-white transition-colors p-1 rounded hover:bg-[hsl(var(--sidebar-hover))]"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </aside>

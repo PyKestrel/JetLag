@@ -71,22 +71,36 @@ async def _resolve_client(client_ip: str, db: AsyncSession) -> tuple[Client, str
 
 
 async def _authenticate_client(client: Client, db: AsyncSession, method: str, session_minutes: int = 0):
-    """Mark client as authenticated, allow through firewall."""
+    """Mark client as authenticated, allow through firewall.
+
+    ``session_minutes`` is the duration of this session (0 = unlimited). It is
+    persisted on the client so expiry checks honor per-plan (tiered) durations
+    instead of the global default.
+    """
     redirect = settings.portal.redirect_url
+    now = datetime.datetime.utcnow()
     if client.auth_state == AuthState.AUTHENTICATED:
-        # Check if time-limited session has expired
-        if session_minutes > 0 and client.authenticated_at:
-            expires = client.authenticated_at + datetime.timedelta(minutes=session_minutes)
-            if datetime.datetime.utcnow() > expires:
+        # Check if time-limited session has expired (use stored duration)
+        stored = client.session_minutes or 0
+        if stored > 0 and client.authenticated_at:
+            expires = client.authenticated_at + datetime.timedelta(minutes=stored)
+            if now > expires:
                 client.auth_state = AuthState.PENDING
                 client.authenticated_at = None
+                client.session_minutes = None
+                await db.flush()
                 await FirewallService.intercept_client(client.ip_address, client.mac_address)
                 return {"message": "Session expired", "expired": True}
+        # Still authenticated — refresh last_seen and re-assert firewall entry
+        client.last_seen = now
+        await db.flush()
+        await FirewallService.allow_client(client.ip_address, client.mac_address)
         return {"message": "Already authenticated", "redirect": redirect}
 
     client.auth_state = AuthState.AUTHENTICATED
-    client.authenticated_at = datetime.datetime.utcnow()
-    client.last_seen = datetime.datetime.utcnow()
+    client.authenticated_at = now
+    client.last_seen = now
+    client.session_minutes = session_minutes or None
     await db.flush()
     await FirewallService.allow_client(client.ip_address, client.mac_address)
     await LoggingService.log_auth_event(db, client.ip_address, client.mac_address, method)
@@ -229,15 +243,17 @@ async def portal_status(request: Request, db: AsyncSession = Depends(get_db)):
     session_remaining = None
     portal_type = settings.portal.portal_type
 
-    # Check time-limited session expiry
-    if is_auth and portal_type in ("time_limited", "tiered") and client.authenticated_at:
-        duration = settings.portal.session_duration_minutes
+    # Check time-limited session expiry using the duration stored at auth time
+    # (tiered plans each carry their own duration; 0/None = unlimited).
+    if is_auth and client.authenticated_at:
+        duration = client.session_minutes or 0
         if duration > 0:
             expires = client.authenticated_at + datetime.timedelta(minutes=duration)
             now = datetime.datetime.utcnow()
             if now > expires:
                 client.auth_state = AuthState.PENDING
                 client.authenticated_at = None
+                client.session_minutes = None
                 await db.flush()
                 await FirewallService.intercept_client(client.ip_address, client.mac_address)
                 is_auth = False

@@ -10,7 +10,7 @@ from app.database import init_db
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 
-from app.routers import clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt, wireless, replay
+from app.routers import auth, clients, profiles, captures, logs, portal, overview, settings, setup, updates, firewall, router_mgmt, wireless, replay, metrics, schedules
 from app.services.impairment import ImpairmentService
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
@@ -75,6 +75,14 @@ async def lifespan(app: FastAPI):
     # Initialize services if setup was already completed (e.g., server restart)
     from app.config import settings as cfg
     import platform
+
+    # Seed the default admin user when authentication is enabled
+    if cfg.admin.auth_enabled:
+        try:
+            from app.services.auth import ensure_default_admin
+            await ensure_default_admin()
+        except Exception as e:
+            logger.error(f"Failed to seed default admin user: {e}")
 
     if cfg.setup_completed and platform.system() == "Linux":
         # Clean up orphaned VLAN sub-interfaces from previous sessions
@@ -162,7 +170,14 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(auto_check_loop())
     logger.info("Background update checker started")
 
+    # Start the schedule evaluator
+    from app.services.scheduler import scheduler_loop
+    scheduler_task = asyncio.create_task(scheduler_loop())
+    logger.info("Scheduler loop started")
+
     yield
+
+    scheduler_task.cancel()
 
     logger.info("JetLag appliance shutting down...")
 
@@ -208,6 +223,9 @@ app.add_middleware(
 # Setup router (always accessible)
 app.include_router(setup.router)
 
+# Auth router (login is always accessible)
+app.include_router(auth.router)
+
 # API routers
 app.include_router(overview.router)
 app.include_router(clients.router)
@@ -221,6 +239,41 @@ app.include_router(firewall.router)
 app.include_router(router_mgmt.router)
 app.include_router(wireless.router)
 app.include_router(replay.router)
+app.include_router(metrics.router)
+app.include_router(schedules.router)
+
+
+# Paths under /api that never require authentication.
+_AUTH_OPEN_PATHS = frozenset({
+    "/api/auth/login",
+    "/api/auth/status",
+    "/api/health",
+    "/api/version",
+})
+
+
+def _enforce_api_auth(request: Request, path: str, cfg):
+    """Return a 401 JSONResponse if the request lacks a valid admin token.
+
+    Returns None when the request is allowed (auth disabled, setup not yet
+    completed, an open path, a CORS preflight, or a valid Bearer token).
+    """
+    # Don't gate the API until setup is done or if auth is disabled.
+    if not cfg.admin.auth_enabled or not cfg.setup_completed:
+        return None
+    if request.method == "OPTIONS":
+        return None
+    # Captive portal endpoints must stay open to LAN clients.
+    if path in _AUTH_OPEN_PATHS or path.startswith("/api/portal"):
+        return None
+
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        from app.services.auth import decode_access_token
+        if decode_access_token(auth_header.split(" ", 1)[1].strip()):
+            return None
+
+    return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
 
 @app.middleware("http")
@@ -236,10 +289,16 @@ async def captive_portal_middleware(request: Request, call_next):
 
     path = request.url.path
 
-    # Always allow API, portal, health, setup, and static asset paths through
+    # API paths: enforce admin authentication (when enabled), then pass through.
+    if path.startswith("/api/"):
+        unauthorized = _enforce_api_auth(request, path, cfg)
+        if unauthorized is not None:
+            return unauthorized
+        return await call_next(request)
+
+    # Always allow portal, health, setup, and static asset paths through
     if (
-        path.startswith("/api/")
-        or path.startswith("/portal")
+        path.startswith("/portal")
         or path.startswith("/assets")
         or path == "/favicon.ico"
     ):

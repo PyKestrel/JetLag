@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.3.3-f97316?style=flat-square" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-0.5.0-f97316?style=flat-square" alt="Version"/>
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python"/>
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="React"/>
   <img src="https://img.shields.io/badge/fastapi-0.115-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/>
@@ -120,7 +120,7 @@ bash scripts/start-dev.sh
 
 This starts:
 - **Backend API** at `http://localhost:8080`
-- **Frontend Admin UI** at `http://localhost:5173`
+- **Frontend Admin UI** at `http://localhost:3000`
 
 Press `Ctrl+C` to stop both.
 

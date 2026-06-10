@@ -1,10 +1,16 @@
 import asyncio
 import logging
+import os
+import re
+import tempfile
 from typing import Optional
 
 from app.config import settings
 
 logger = logging.getLogger("jetlag.firewall")
+
+# Characters permitted in a free-text nftables comment.
+_COMMENT_RE = re.compile(r"[^A-Za-z0-9 _.\-]")
 
 
 class FirewallService:
@@ -19,6 +25,24 @@ class FirewallService:
         )
         stdout, stderr = await proc.communicate()
         return stdout.decode(), stderr.decode(), proc.returncode
+
+    @staticmethod
+    async def _apply_ruleset(ruleset: str) -> tuple[str, str, int]:
+        """Load a full nftables ruleset via a temp file (avoids shell quoting).
+
+        Using ``nft -f <file>`` instead of ``echo '...' | nft -f -`` means the
+        ruleset can safely contain any character (quotes, semicolons, etc.).
+        """
+        fd, path = tempfile.mkstemp(prefix="jetlag-nft-", suffix=".conf")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(ruleset)
+            return await FirewallService._run(f"nft -f {path}")
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     @staticmethod
     async def initialize():
@@ -122,9 +146,7 @@ table inet jetlag {{
     }}
 }}
 """
-        result_out, result_err, rc = await FirewallService._run(
-            f"echo '{ruleset}' | nft -f -"
-        )
+        result_out, result_err, rc = await FirewallService._apply_ruleset(ruleset)
         if rc != 0:
             logger.error(f"Failed to initialize nftables: {result_err}")
             raise RuntimeError(f"nftables init failed: {result_err}")
@@ -250,49 +272,91 @@ table inet jetlag {{
 
         logger.info(f"Applied {len(rules)} custom firewall rules")
 
+    # ── Validation helpers (prevent shell/nft injection from DB values) ──
+
     @staticmethod
-    def _build_nft_rule(rule) -> str:
-        """Convert a FirewallRule model instance into an nftables rule string."""
+    def _valid_ip(value: str) -> bool:
+        """Accept a single IPv4 address or CIDR network."""
+        import ipaddress
+        try:
+            if "/" in value:
+                ipaddress.IPv4Network(value, strict=False)
+            else:
+                ipaddress.IPv4Address(value)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    def _valid_port(value: str) -> bool:
+        """Accept a single port (1-65535) or an inclusive range 'a-b'."""
+        value = str(value).strip()
+        m = re.fullmatch(r"(\d{1,5})(?:-(\d{1,5}))?", value)
+        if not m:
+            return False
+        lo = int(m.group(1))
+        hi = int(m.group(2)) if m.group(2) else lo
+        return 0 < lo <= hi <= 65535
+
+    @staticmethod
+    def _build_nft_rule(rule) -> Optional[str]:
+        """Convert a FirewallRule model instance into an nftables rule string.
+
+        All values originate from the database and are validated/escaped before
+        interpolation so a malicious rule name or field can't inject nft/shell
+        syntax. Returns None if the rule is invalid and should be skipped.
+        """
         parts = []
 
         # Protocol match
         proto = getattr(rule, "protocol", "any") or "any"
+        if proto not in ("tcp", "udp", "icmp", "any"):
+            logger.warning(f"Skipping rule {getattr(rule, 'id', '?')}: bad protocol {proto!r}")
+            return None
         if proto != "any":
             parts.append(f"{proto}")
 
         # Source IP
         if rule.src_ip:
+            if not FirewallService._valid_ip(rule.src_ip):
+                logger.warning(f"Skipping rule {rule.id}: invalid src_ip {rule.src_ip!r}")
+                return None
             parts.append(f"ip saddr {rule.src_ip}")
 
         # Destination IP
         if rule.dst_ip:
+            if not FirewallService._valid_ip(rule.dst_ip):
+                logger.warning(f"Skipping rule {rule.id}: invalid dst_ip {rule.dst_ip!r}")
+                return None
             parts.append(f"ip daddr {rule.dst_ip}")
 
         # Source port (requires tcp/udp)
-        if rule.src_port:
-            if proto in ("tcp", "udp"):
-                parts.append(f"{proto} sport {rule.src_port}")
-            else:
-                # If protocol is 'any', we can't match a port without specifying
-                # a transport protocol — skip port match
-                pass
+        if rule.src_port and proto in ("tcp", "udp"):
+            if not FirewallService._valid_port(rule.src_port):
+                logger.warning(f"Skipping rule {rule.id}: invalid src_port {rule.src_port!r}")
+                return None
+            parts.append(f"{proto} sport {rule.src_port}")
 
         # Destination port (requires tcp/udp)
-        if rule.dst_port:
-            if proto in ("tcp", "udp"):
-                parts.append(f"{proto} dport {rule.dst_port}")
-            else:
-                pass
+        if rule.dst_port and proto in ("tcp", "udp"):
+            if not FirewallService._valid_port(rule.dst_port):
+                logger.warning(f"Skipping rule {rule.id}: invalid dst_port {rule.dst_port!r}")
+                return None
+            parts.append(f"{proto} dport {rule.dst_port}")
 
         # Action
         action = getattr(rule, "action", "drop") or "drop"
+        if action not in ("accept", "drop", "reject"):
+            logger.warning(f"Skipping rule {rule.id}: bad action {action!r}")
+            return None
         parts.append(action)
 
-        # Comment
+        # Comment — strip to an allowlisted character set
         comment = getattr(rule, "comment", None) or getattr(rule, "name", "")
         if comment:
-            safe = comment.replace('"', '\\"')[:64]
-            parts.append(f'comment "{safe}"')
+            safe = _COMMENT_RE.sub("", comment)[:64].strip()
+            if safe:
+                parts.append(f'comment "{safe}"')
 
         return " ".join(parts)
 

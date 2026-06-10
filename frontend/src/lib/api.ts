@@ -1,16 +1,66 @@
 const API_BASE = '/api';
 
+const TOKEN_KEY = 'jetlag_token';
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
     ...options,
   });
+  if (res.status === 401) {
+    // Token missing/expired — drop it and bounce to login.
+    clearToken();
+    if (!path.startsWith('/auth/')) {
+      window.dispatchEvent(new CustomEvent('jetlag:unauthorized'));
+    }
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || body.message || 'Not authenticated');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || body.message || `${res.statusText} (${res.status})`);
   }
   return res.json();
 }
+
+// ── Auth ──────────────────────────────────────────────────────────
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  username: string;
+  role: string;
+  must_change_password: boolean;
+}
+export interface AuthStatus {
+  auth_enabled: boolean;
+}
+export interface CurrentUser {
+  username: string;
+  role: string;
+  must_change_password: boolean;
+  last_login: string | null;
+}
+export const getAuthStatus = () => request<AuthStatus>('/auth/status');
+export const login = (username: string, password: string) =>
+  request<LoginResponse>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+export const getCurrentUser = () => request<CurrentUser>('/auth/me');
+export const changePassword = (current_password: string, new_password: string) =>
+  request<{ message: string }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password, new_password }),
+  });
 
 // Overview
 export const getOverview = () => request<OverviewData>('/overview');
@@ -869,3 +919,87 @@ export const getReplayHistory = (params?: Record<string, string>) => {
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
   return request<PaginatedResponse<ReplayHistoryEntry>>(`/replay/history${qs}`);
 };
+
+// ── Metrics ────────────────────────────────────────────────────────
+export interface InterfaceMetric {
+  interface: string;
+  rx_bps: number;
+  tx_bps: number;
+  rx_pps: number;
+  tx_pps: number;
+  rx_bytes: number;
+  tx_bytes: number;
+}
+export interface MetricsSnapshot {
+  timestamp: number;
+  interfaces: InterfaceMetric[];
+  aggregate: { rx_bps: number; tx_bps: number };
+  supported: boolean;
+  clients: { total: number; authenticated: number };
+}
+export interface MetricsHistory {
+  samples: { t: number; rx_bps: number; tx_bps: number }[];
+  supported: boolean;
+}
+export const getInterfaceMetrics = () => request<MetricsSnapshot>('/metrics/interfaces');
+export const getMetricsHistory = () => request<MetricsHistory>('/metrics/history');
+
+// ── Schedules ──────────────────────────────────────────────────────
+export type ScheduleAction = 'enable_profile' | 'disable_profile' | 'start_replay' | 'stop_replay';
+export interface Schedule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  action: ScheduleAction;
+  profile_id: number | null;
+  scenario_id: number | null;
+  loop: boolean;
+  playback_speed: number;
+  trigger_type: 'once' | 'recurring';
+  run_at: string | null;
+  days_of_week: string | null;
+  time_of_day: string | null;
+  last_run: string | null;
+  next_run: string | null;
+  created_at: string;
+}
+export interface ScheduleCreate {
+  name: string;
+  enabled?: boolean;
+  action: ScheduleAction;
+  profile_id?: number | null;
+  scenario_id?: number | null;
+  loop?: boolean;
+  playback_speed?: number;
+  trigger_type: 'once' | 'recurring';
+  run_at?: string | null;
+  days_of_week?: string | null;
+  time_of_day?: string | null;
+}
+export const getSchedules = () => request<{ items: Schedule[] }>('/schedules');
+export const createSchedule = (data: ScheduleCreate) =>
+  request<Schedule>('/schedules', { method: 'POST', body: JSON.stringify(data) });
+export const updateSchedule = (id: number, data: Partial<ScheduleCreate>) =>
+  request<Schedule>(`/schedules/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteSchedule = (id: number) =>
+  request<{ message: string }>(`/schedules/${id}`, { method: 'DELETE' });
+export const runScheduleNow = (id: number) =>
+  request<{ message: string; action: string }>(`/schedules/${id}/run`, { method: 'POST' });
+
+// ── Per-client impairment ──────────────────────────────────────────
+export interface ClientImpairment {
+  client_id: number;
+  ip_address: string | null;
+  profiles: { id: number; name: string; enabled: boolean }[];
+}
+export const getClientImpairment = (clientId: number) =>
+  request<ClientImpairment>(`/clients/${clientId}/impairment`);
+export const attachClientImpairment = (clientId: number, profileId: number) =>
+  request<{ message: string; profile_id: number }>(`/clients/${clientId}/impairment`, {
+    method: 'POST',
+    body: JSON.stringify({ profile_id: profileId }),
+  });
+export const detachClientImpairment = (clientId: number, profileId: number) =>
+  request<{ message: string }>(`/clients/${clientId}/impairment/${profileId}`, {
+    method: 'DELETE',
+  });

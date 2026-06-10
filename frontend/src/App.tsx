@@ -12,20 +12,38 @@ import FirewallPage from './pages/FirewallPage'
 import RouterPage from './pages/RouterPage'
 import CaptivePortalPage from './pages/CaptivePortalPage'
 import WirelessPage from './pages/WirelessPage'
+import SchedulesPage from './pages/SchedulesPage'
 import SetupWizard from './pages/SetupWizard'
-import { getSetupStatus } from './lib/api'
+import LoginPage from './pages/LoginPage'
+import { getSetupStatus, getAuthStatus, getToken, clearToken } from './lib/api'
 
 export default function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null)
+  const [authEnabled, setAuthEnabled] = useState<boolean | null>(null)
+  const [authed, setAuthed] = useState<boolean>(!!getToken())
 
   useEffect(() => {
-    getSetupStatus()
-      .then((s) => setSetupDone(s.setup_completed))
-      .catch(() => setSetupDone(false))
+    Promise.all([
+      getSetupStatus().then((s) => s.setup_completed).catch(() => false),
+      getAuthStatus().then((a) => a.auth_enabled).catch(() => false),
+    ]).then(([setup, auth]) => {
+      setSetupDone(setup)
+      setAuthEnabled(auth)
+    })
   }, [])
 
-  // Loading state while checking setup status
-  if (setupDone === null) {
+  // Global 401 handler — bounce back to login when a token expires.
+  useEffect(() => {
+    const handler = () => {
+      clearToken()
+      setAuthed(false)
+    }
+    window.addEventListener('jetlag:unauthorized', handler)
+    return () => window.removeEventListener('jetlag:unauthorized', handler)
+  }, [])
+
+  // Loading state while checking setup + auth status
+  if (setupDone === null || authEnabled === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -38,6 +56,11 @@ export default function App() {
     return <SetupWizard onComplete={() => setSetupDone(true)} />
   }
 
+  // Require login when auth is enabled and we don't have a valid session
+  if (authEnabled && !authed) {
+    return <LoginPage onAuthenticated={() => setAuthed(true)} />
+  }
+
   return (
     <Routes>
       <Route element={<Layout />}>
@@ -45,6 +68,7 @@ export default function App() {
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/profiles" element={<ProfilesPage />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/captures" element={<CapturesPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

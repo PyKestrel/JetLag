@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { Monitor, Gauge, FileDown, Wifi, WifiOff, Activity, ArrowRight, ExternalLink } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import { getOverview, type OverviewData } from '@/lib/api'
+import MetricsPanel from '@/components/MetricsPanel'
 
 function StatCard({
   label,
@@ -121,6 +122,9 @@ export default function OverviewPage() {
           }
         />
       </div>
+
+      {/* Live throughput metrics */}
+      <MetricsPanel />
 
       {/* Quick navigation — Cloudflare card style */}
       <div className="mb-2">

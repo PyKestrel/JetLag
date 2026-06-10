@@ -40,6 +40,7 @@ class ReplaySession:
     playback_speed: float = 1.0
     state: str = "idle"  # idle, running, paused, completed, stopped
     current_step_index: int = 0
+    steps_applied: int = 0
     total_steps: int = 0
     total_ms: int = 0
     elapsed_ms: int = 0
@@ -234,6 +235,8 @@ class ReplayService:
                         # Apply tc/netem rules
                         await ImpairmentService.apply_profile(profile)
 
+                    session.steps_applied += 1
+
                     logger.debug(
                         f"Replay step {i}/{len(steps)} on profile {profile_id}: "
                         f"latency={step['latency_ms']}ms jitter={step['jitter_ms']}ms "
@@ -296,7 +299,7 @@ class ReplayService:
                     scenario_id=session.scenario_id,
                     scenario_name=scenario_name,
                     state=session.state,
-                    steps_played=session.current_step_index + 1,
+                    steps_played=session.steps_applied,
                     total_steps=session.total_steps,
                     elapsed_ms=session.elapsed_ms,
                     total_ms=session.total_ms,
