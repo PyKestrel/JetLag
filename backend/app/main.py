@@ -76,13 +76,9 @@ async def lifespan(app: FastAPI):
     from app.config import settings as cfg
     import platform
 
-    # Seed the default admin user when authentication is enabled
-    if cfg.admin.auth_enabled:
-        try:
-            from app.services.auth import ensure_default_admin
-            await ensure_default_admin()
-        except Exception as e:
-            logger.error(f"Failed to seed default admin user: {e}")
+    # The first admin user is created interactively via the setup UI
+    # (POST /api/auth/setup-admin) rather than being auto-seeded, so the
+    # frontend can prompt for credentials on fresh and upgraded instances.
 
     if cfg.setup_completed and platform.system() == "Linux":
         # Clean up orphaned VLAN sub-interfaces from previous sessions
@@ -253,6 +249,8 @@ app.include_router(schedules.router)
 _AUTH_OPEN_PATHS = frozenset({
     "/api/auth/login",
     "/api/auth/status",
+    "/api/auth/setup-admin",
+    "/api/setup/status",
     "/api/health",
     "/api/version",
 })

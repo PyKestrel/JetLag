@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.client import Client, AuthState
 from app.services.metrics import MetricsService
+from app.services.client_metrics import ClientMetricsService
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -35,3 +36,9 @@ async def metrics_history():
 async def metrics_range(minutes: int = Query(60, ge=1, le=1440)):
     """Persisted aggregate throughput over the last ``minutes`` (max 24h)."""
     return await MetricsService.range(minutes)
+
+
+@router.get("/clients")
+async def client_metrics():
+    """Per-client live upload/download rates keyed by client IP."""
+    return ClientMetricsService.sample()

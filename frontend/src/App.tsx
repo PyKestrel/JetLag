@@ -15,20 +15,23 @@ import WirelessPage from './pages/WirelessPage'
 import SchedulesPage from './pages/SchedulesPage'
 import SetupWizard from './pages/SetupWizard'
 import LoginPage from './pages/LoginPage'
+import AdminSetupPage from './pages/AdminSetupPage'
 import { getSetupStatus, getAuthStatus, getToken, clearToken } from './lib/api'
 
 export default function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null)
   const [authEnabled, setAuthEnabled] = useState<boolean | null>(null)
+  const [needsAdminSetup, setNeedsAdminSetup] = useState<boolean>(false)
   const [authed, setAuthed] = useState<boolean>(!!getToken())
 
   useEffect(() => {
     Promise.all([
       getSetupStatus().then((s) => s.setup_completed).catch(() => false),
-      getAuthStatus().then((a) => a.auth_enabled).catch(() => false),
+      getAuthStatus().catch(() => ({ auth_enabled: false, needs_admin_setup: false })),
     ]).then(([setup, auth]) => {
       setSetupDone(setup)
-      setAuthEnabled(auth)
+      setAuthEnabled(auth.auth_enabled)
+      setNeedsAdminSetup(auth.needs_admin_setup)
     })
   }, [])
 
@@ -48,6 +51,18 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
+    )
+  }
+
+  // No admin account yet (fresh install or upgraded instance) — create one first.
+  if (needsAdminSetup) {
+    return (
+      <AdminSetupPage
+        onComplete={() => {
+          setNeedsAdminSetup(false)
+          setAuthed(true)
+        }}
+      />
     )
   }
 

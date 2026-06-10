@@ -42,6 +42,7 @@ export interface LoginResponse {
 }
 export interface AuthStatus {
   auth_enabled: boolean;
+  needs_admin_setup: boolean;
 }
 export interface CurrentUser {
   username: string;
@@ -52,6 +53,11 @@ export interface CurrentUser {
 export const getAuthStatus = () => request<AuthStatus>('/auth/status');
 export const login = (username: string, password: string) =>
   request<LoginResponse>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+export const setupAdmin = (username: string, password: string) =>
+  request<LoginResponse>('/auth/setup-admin', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   });
@@ -946,10 +952,15 @@ export interface MetricsRange {
   minutes: number;
   supported: boolean;
 }
+export interface ClientMetrics {
+  supported: boolean;
+  clients: Record<string, { rx_bps: number; tx_bps: number }>;
+}
 export const getInterfaceMetrics = () => request<MetricsSnapshot>('/metrics/interfaces');
 export const getMetricsHistory = () => request<MetricsHistory>('/metrics/history');
 export const getMetricsRange = (minutes: number) =>
   request<MetricsRange>(`/metrics/range?minutes=${minutes}`);
+export const getClientMetrics = () => request<ClientMetrics>('/metrics/clients');
 
 // ── Schedules ──────────────────────────────────────────────────────
 export type ScheduleAction = 'enable_profile' | 'disable_profile' | 'start_replay' | 'stop_replay';

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { RefreshCw, Shield, ShieldOff, RotateCcw, Search, MoreVertical, ChevronLeft, ChevronRight, Gauge, X, Trash2 } from 'lucide-react'
+import { RefreshCw, Shield, ShieldOff, RotateCcw, Search, MoreVertical, ChevronLeft, ChevronRight, Gauge, X, Trash2, ArrowDown, ArrowUp } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import {
   getClients,
@@ -10,11 +10,20 @@ import {
   attachClientImpairment,
   detachClientImpairment,
   getProfiles,
+  getClientMetrics,
   type Client,
   type ClientImpairment,
   type ImpairmentProfile,
+  type ClientMetrics,
   type PaginatedResponse,
 } from '@/lib/api'
+
+function formatBps(bps: number): string {
+  if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} Gb/s`
+  if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} Mb/s`
+  if (bps >= 1e3) return `${(bps / 1e3).toFixed(1)} Kb/s`
+  return `${Math.round(bps)} b/s`
+}
 
 function ImpairModal({ client, onClose }: { client: Client; onClose: () => void }) {
   const [impairment, setImpairment] = useState<ClientImpairment | null>(null)
@@ -197,10 +206,29 @@ export default function ClientsPage() {
   const [search, setSearch] = useState('')
   const [actionLoading, setActionLoading] = useState<number | null>(null)
   const [impairClient, setImpairClient] = useState<Client | null>(null)
+  const [clientMetrics, setClientMetrics] = useState<ClientMetrics['clients']>({})
   const { data, loading, error, refetch } = useApi<PaginatedResponse<Client>>(
     () => getClients({ page: String(page), per_page: '10' }),
     [page]
   )
+
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const m = await getClientMetrics()
+        if (!cancelled) setClientMetrics(m.clients || {})
+      } catch {
+        /* transient — keep last values */
+      }
+    }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
 
   const handleAuth = async (id: number) => {
     setActionLoading(id)
@@ -320,6 +348,7 @@ export default function ClientsPage() {
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Hostname</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">VLAN</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Status</th>
+                  <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Throughput</th>
                   <th className="text-left text-[12px] font-medium text-muted-foreground px-4 py-2.5">Last Seen</th>
                   <th className="text-right text-[12px] font-medium text-muted-foreground px-4 py-2.5 w-10"></th>
                 </tr>
@@ -327,7 +356,7 @@ export default function ClientsPage() {
               <tbody className="divide-y divide-border">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+                    <td colSpan={8} className="px-4 py-10 text-center text-[13px] text-muted-foreground">
                       {search ? 'No clients match your search' : 'No clients connected'}
                     </td>
                   </tr>
@@ -349,6 +378,20 @@ export default function ClientsPage() {
                             <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
                             PENDING
                           </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-[12px]">
+                        {client.ip_address && clientMetrics[client.ip_address] ? (
+                          <div className="flex items-center gap-3 font-mono">
+                            <span className="inline-flex items-center gap-1 text-emerald-600" title="Download">
+                              <ArrowDown className="h-3 w-3" />{formatBps(clientMetrics[client.ip_address].rx_bps)}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-blue-600" title="Upload">
+                              <ArrowUp className="h-3 w-3" />{formatBps(clientMetrics[client.ip_address].tx_bps)}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-[13px] text-muted-foreground">

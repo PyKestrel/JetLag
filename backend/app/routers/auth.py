@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.user import User
 from app.services.auth import (
     authenticate_user,
+    count_users,
     create_access_token,
     decode_access_token,
     hash_password,
@@ -31,6 +32,11 @@ class LoginRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class SetupAdminRequest(BaseModel):
+    username: str
+    password: str
 
 
 # ── Dependency: resolve the current user from the Bearer token ──
@@ -55,8 +61,45 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
 @router.get("/status")
 async def auth_status(db: AsyncSession = Depends(get_db)):
-    """Public: tells the frontend whether auth is enabled (no token needed)."""
-    return {"auth_enabled": settings.admin.auth_enabled}
+    """Public: tells the frontend whether auth is enabled and whether an admin
+    account still needs to be created (no token needed)."""
+    needs_admin_setup = settings.admin.auth_enabled and (await count_users(db)) == 0
+    return {
+        "auth_enabled": settings.admin.auth_enabled,
+        "needs_admin_setup": needs_admin_setup,
+    }
+
+
+@router.post("/setup-admin")
+async def setup_admin(payload: SetupAdminRequest, db: AsyncSession = Depends(get_db)):
+    """Create the first admin account. Only allowed when no users exist yet.
+
+    Used by the setup UI on fresh installs and by upgraded instances that have
+    no admin account. Returns a token so the new admin is logged in directly.
+    """
+    if (await count_users(db)) > 0:
+        raise HTTPException(status_code=409, detail="An admin account already exists")
+    username = payload.username.strip()
+    if len(username) < 3:
+        raise HTTPException(status_code=422, detail="Username must be at least 3 characters")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+    user = User(
+        username=username,
+        password_hash=hash_password(payload.password),
+        role="admin",
+        must_change_password=False,
+    )
+    db.add(user)
+    await db.flush()
+    token = create_access_token(user.username, user.role)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "username": user.username,
+        "role": user.role,
+        "must_change_password": False,
+    }
 
 
 @router.post("/login")
