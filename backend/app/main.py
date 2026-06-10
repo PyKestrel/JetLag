@@ -175,9 +175,15 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler_loop())
     logger.info("Scheduler loop started")
 
+    # Start the metrics sampler (persists throughput history)
+    from app.services.metrics import metrics_sampler_loop
+    metrics_task = asyncio.create_task(metrics_sampler_loop())
+    logger.info("Metrics sampler loop started")
+
     yield
 
     scheduler_task.cancel()
+    metrics_task.cancel()
 
     logger.info("JetLag appliance shutting down...")
 

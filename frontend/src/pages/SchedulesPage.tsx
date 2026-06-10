@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CalendarClock, Plus, Trash2, Play, Power } from 'lucide-react'
+import { CalendarClock, Plus, Trash2, Play, Power, Pencil } from 'lucide-react'
 import {
   getSchedules,
   createSchedule,
@@ -39,11 +39,37 @@ function emptyForm(): ScheduleCreate {
   }
 }
 
+/** Convert an ISO timestamp to the value expected by <input type="datetime-local">. */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function scheduleToForm(s: Schedule): ScheduleCreate {
+  return {
+    name: s.name,
+    enabled: s.enabled,
+    action: s.action,
+    profile_id: s.profile_id,
+    scenario_id: s.scenario_id,
+    loop: s.loop,
+    playback_speed: s.playback_speed,
+    trigger_type: s.trigger_type,
+    run_at: toLocalInput(s.run_at),
+    days_of_week: s.days_of_week || '',
+    time_of_day: s.time_of_day || '09:00',
+  }
+}
+
 export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [profiles, setProfiles] = useState<ImpairmentProfile[]>([])
   const [scenarios, setScenarios] = useState<ReplayScenarioListItem[]>([])
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<ScheduleCreate>(emptyForm())
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -77,7 +103,25 @@ export default function SchedulesPage() {
     setForm({ ...form, days_of_week: Array.from(set).sort().join(',') })
   }
 
-  async function handleCreate(e: React.FormEvent) {
+  function openCreate() {
+    setEditingId(null)
+    setForm(emptyForm())
+    setShowForm(true)
+  }
+
+  function openEdit(s: Schedule) {
+    setEditingId(s.id)
+    setForm(scheduleToForm(s))
+    setShowForm(true)
+  }
+
+  function closeForm() {
+    setShowForm(false)
+    setEditingId(null)
+    setForm(emptyForm())
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     const payload: ScheduleCreate = { ...form }
@@ -89,12 +133,15 @@ export default function SchedulesPage() {
     }
     if (payload.action !== 'start_replay') payload.scenario_id = null
     try {
-      await createSchedule(payload)
-      setShowForm(false)
-      setForm(emptyForm())
+      if (editingId !== null) {
+        await updateSchedule(editingId, payload)
+      } else {
+        await createSchedule(payload)
+      }
+      closeForm()
       refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create schedule')
+      setError(e instanceof Error ? e.message : `Failed to ${editingId !== null ? 'update' : 'create'} schedule`)
     }
   }
 
@@ -131,7 +178,7 @@ export default function SchedulesPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => (showForm ? closeForm() : openCreate())}
           className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
         >
           <Plus className="h-4 w-4" /> New schedule
@@ -143,7 +190,10 @@ export default function SchedulesPage() {
       )}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="mb-6 bg-card border border-border rounded-lg p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="mb-6 bg-card border border-border rounded-lg p-5 space-y-4">
+          <p className="text-sm font-semibold text-foreground">
+            {editingId !== null ? 'Edit schedule' : 'New schedule'}
+          </p>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1.5">Name</label>
@@ -274,9 +324,9 @@ export default function SchedulesPage() {
 
           <div className="flex gap-2 pt-2">
             <button type="submit" className="px-3 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90">
-              Create
+              {editingId !== null ? 'Save changes' : 'Create'}
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 text-sm rounded-md border border-input hover:bg-muted">
+            <button type="button" onClick={closeForm} className="px-3 py-2 text-sm rounded-md border border-input hover:bg-muted">
               Cancel
             </button>
           </div>
@@ -325,6 +375,9 @@ export default function SchedulesPage() {
                       </button>
                       <button onClick={() => handleToggle(s)} title={s.enabled ? 'Disable' : 'Enable'} className={'p-1.5 rounded hover:bg-muted ' + (s.enabled ? 'text-green-500' : 'text-muted-foreground')}>
                         <Power className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => openEdit(s)} title="Edit" className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                        <Pencil className="h-4 w-4" />
                       </button>
                       <button onClick={() => handleDelete(s.id)} title="Delete" className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive">
                         <Trash2 className="h-4 w-4" />

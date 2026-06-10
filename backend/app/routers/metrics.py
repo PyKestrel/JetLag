@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,3 +29,9 @@ async def interface_metrics(db: AsyncSession = Depends(get_db)):
 async def metrics_history():
     """Recent aggregate throughput samples for sparkline charts."""
     return MetricsService.history()
+
+
+@router.get("/range")
+async def metrics_range(minutes: int = Query(60, ge=1, le=1440)):
+    """Persisted aggregate throughput over the last ``minutes`` (max 24h)."""
+    return await MetricsService.range(minutes)

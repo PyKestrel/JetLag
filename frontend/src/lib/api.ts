@@ -941,8 +941,15 @@ export interface MetricsHistory {
   samples: { t: number; rx_bps: number; tx_bps: number }[];
   supported: boolean;
 }
+export interface MetricsRange {
+  samples: { t: number; rx_bps: number; tx_bps: number }[];
+  minutes: number;
+  supported: boolean;
+}
 export const getInterfaceMetrics = () => request<MetricsSnapshot>('/metrics/interfaces');
 export const getMetricsHistory = () => request<MetricsHistory>('/metrics/history');
+export const getMetricsRange = (minutes: number) =>
+  request<MetricsRange>(`/metrics/range?minutes=${minutes}`);
 
 // ── Schedules ──────────────────────────────────────────────────────
 export type ScheduleAction = 'enable_profile' | 'disable_profile' | 'start_replay' | 'stop_replay';

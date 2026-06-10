@@ -5,6 +5,8 @@ ring buffer keeps recent aggregate throughput so the UI can draw sparklines
 without a time-series database.
 """
 
+import asyncio
+import datetime
 import logging
 import platform
 import time
@@ -16,6 +18,12 @@ from app.config import settings
 logger = logging.getLogger("jetlag.metrics")
 
 _IS_LINUX = platform.system() == "Linux"
+
+# Background sampler / persistence tuning.
+SAMPLE_INTERVAL_SECONDS = 10
+RETENTION_HOURS = 24
+# Hard cap on the number of points returned by a range query (downsampled).
+MAX_RANGE_POINTS = 600
 
 # Per-interface previous counter sample: iface -> (timestamp, rx_bytes, tx_bytes, rx_pkts, tx_pkts)
 _prev_samples: dict[str, tuple[float, int, int, int, int]] = {}
@@ -129,3 +137,68 @@ class MetricsService:
     @staticmethod
     def history() -> dict:
         return {"samples": list(_history), "supported": _IS_LINUX}
+
+    @staticmethod
+    async def persist_current() -> None:
+        """Take a sample and persist the aggregate point, pruning old rows."""
+        snapshot = MetricsService.sample()
+        agg = snapshot["aggregate"]
+        from app.database import async_session
+        from app.models.metric_sample import MetricSample
+
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=RETENTION_HOURS)
+        async with async_session() as db:
+            db.add(MetricSample(rx_bps=int(agg["rx_bps"]), tx_bps=int(agg["tx_bps"])))
+            from sqlalchemy import delete
+
+            await db.execute(delete(MetricSample).where(MetricSample.ts < cutoff))
+            await db.commit()
+
+    @staticmethod
+    async def range(minutes: int) -> dict:
+        """Return persisted aggregate samples for the last ``minutes``.
+
+        Results are downsampled to at most ``MAX_RANGE_POINTS`` evenly-spaced
+        points so the payload (and chart) stays manageable for wide ranges.
+        """
+        from app.database import async_session
+        from app.models.metric_sample import MetricSample
+        from sqlalchemy import select
+
+        since = datetime.datetime.utcnow() - datetime.timedelta(minutes=max(1, minutes))
+        async with async_session() as db:
+            result = await db.execute(
+                select(MetricSample)
+                .where(MetricSample.ts >= since)
+                .order_by(MetricSample.ts.asc())
+            )
+            rows = result.scalars().all()
+
+        stride = max(1, len(rows) // MAX_RANGE_POINTS)
+        samples = [
+            {
+                "t": int(r.ts.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000),
+                "rx_bps": r.rx_bps,
+                "tx_bps": r.tx_bps,
+            }
+            for r in rows[::stride]
+        ]
+        return {"samples": samples, "minutes": minutes, "supported": _IS_LINUX}
+
+
+async def metrics_sampler_loop() -> None:
+    """Long-running background task; start from the app lifespan.
+
+    Periodically samples throughput and persists an aggregate data point so the
+    UI can render historical charts that survive restarts.
+    """
+    logger.info("Metrics sampler loop started")
+    while True:
+        try:
+            await MetricsService.persist_current()
+        except asyncio.CancelledError:
+            logger.info("Metrics sampler loop stopped")
+            raise
+        except Exception as exc:
+            logger.error(f"Metrics sampler error: {exc}")
+        await asyncio.sleep(SAMPLE_INTERVAL_SECONDS)

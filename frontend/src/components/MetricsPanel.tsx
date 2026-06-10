@@ -3,9 +3,20 @@ import { Activity, ArrowDown, ArrowUp, Users } from 'lucide-react'
 import {
   getInterfaceMetrics,
   getMetricsHistory,
+  getMetricsRange,
   type MetricsSnapshot,
   type MetricsHistory,
+  type MetricsRange,
 } from '@/lib/api'
+
+type RangeKey = 'live' | '60' | '360' | '1440'
+
+const RANGES: { key: RangeKey; label: string }[] = [
+  { key: 'live', label: 'Live' },
+  { key: '60', label: '1h' },
+  { key: '360', label: '6h' },
+  { key: '1440', label: '24h' },
+]
 
 function formatBps(bps: number): string {
   if (bps >= 1e9) return `${(bps / 1e9).toFixed(1)} Gb/s`
@@ -45,8 +56,12 @@ function Sparkline({
 export default function MetricsPanel() {
   const [snapshot, setSnapshot] = useState<MetricsSnapshot | null>(null)
   const [history, setHistory] = useState<MetricsHistory | null>(null)
+  const [rangeData, setRangeData] = useState<MetricsRange | null>(null)
+  const [range, setRange] = useState<RangeKey>('live')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const rangeTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Live snapshot (current rates + per-interface table) — always polling.
   useEffect(() => {
     let cancelled = false
     async function poll() {
@@ -68,19 +83,65 @@ export default function MetricsPanel() {
     }
   }, [])
 
-  const rxSeries = (history?.samples || []).map((s) => s.rx_bps)
-  const txSeries = (history?.samples || []).map((s) => s.tx_bps)
+  // Historical range fetch — only active when a non-live range is selected.
+  useEffect(() => {
+    if (rangeTimer.current) {
+      clearInterval(rangeTimer.current)
+      rangeTimer.current = null
+    }
+    if (range === 'live') {
+      setRangeData(null)
+      return
+    }
+    let cancelled = false
+    async function fetchRange() {
+      try {
+        const data = await getMetricsRange(Number(range))
+        if (!cancelled) setRangeData(data)
+      } catch {
+        /* transient — keep last values */
+      }
+    }
+    fetchRange()
+    rangeTimer.current = setInterval(fetchRange, 15000)
+    return () => {
+      cancelled = true
+      if (rangeTimer.current) clearInterval(rangeTimer.current)
+    }
+  }, [range])
+
+  const chartSamples = range === 'live' ? history?.samples : rangeData?.samples
+  const rxSeries = (chartSamples || []).map((s) => s.rx_bps)
+  const txSeries = (chartSamples || []).map((s) => s.tx_bps)
   const agg = snapshot?.aggregate
 
   return (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-[15px] font-semibold text-foreground flex items-center gap-2">
-          <Activity className="h-4 w-4" /> Live throughput
+          <Activity className="h-4 w-4" /> Throughput
         </h2>
-        {snapshot && !snapshot.supported && (
-          <span className="text-[12px] text-muted-foreground">Live metrics require the Linux appliance</span>
-        )}
+        <div className="flex items-center gap-2">
+          {snapshot && !snapshot.supported && (
+            <span className="text-[12px] text-muted-foreground">Live metrics require the Linux appliance</span>
+          )}
+          <div className="inline-flex rounded-md border border-border overflow-hidden">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                onClick={() => setRange(r.key)}
+                className={
+                  'px-2.5 py-1 text-[12px] transition-colors ' +
+                  (range === r.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-card text-muted-foreground hover:text-foreground')
+                }
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
