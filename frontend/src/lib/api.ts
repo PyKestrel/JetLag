@@ -257,8 +257,14 @@ export const updateFirewallRule = (id: number, data: Partial<FirewallRuleCreate>
   request<FirewallRule>(`/firewall/rules/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteFirewallRule = (id: number) =>
   request<{ message: string }>(`/firewall/rules/${id}`, { method: 'DELETE' });
+export interface FirewallApplyResult {
+  message: string;
+  applied: number;
+  total: number;
+  failed: { id: number | null; name: string; error: string }[];
+}
 export const applyFirewallRules = () =>
-  request<{ message: string }>('/firewall/rules/apply', { method: 'POST' });
+  request<FirewallApplyResult>('/firewall/rules/apply', { method: 'POST' });
 export const getFirewallStatus = () =>
   request<{ ruleset: string; chains: number; rules_count: number }>('/firewall/status');
 

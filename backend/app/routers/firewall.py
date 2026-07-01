@@ -100,10 +100,24 @@ async def apply_rules(db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
     try:
-        await FirewallService.apply_custom_rules(rows)
-        return {"message": f"Applied {len(rows)} firewall rules to nftables"}
+        result = await FirewallService.apply_custom_rules(rows)
     except Exception as e:
+        logger.exception("Firewall apply crashed")
         raise HTTPException(500, f"Failed to apply rules: {e}")
+
+    applied = result["applied"]
+    failed = result["failed"]
+    total = result["total"]
+    if failed:
+        message = f"Applied {applied} of {total} rules — {len(failed)} failed"
+    else:
+        message = f"Applied {applied} firewall rules to nftables"
+    return {
+        "message": message,
+        "applied": applied,
+        "total": total,
+        "failed": failed,
+    }
 
 
 @router.get("/status")

@@ -89,7 +89,7 @@ export default function FirewallPage() {
   const [form, setForm] = useState<FirewallRuleCreate>({ ...EMPTY_FORM })
   const [saving, setSaving] = useState(false)
   const [applying, setApplying] = useState(false)
-  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string; details?: string[] } | null>(null)
   const [showPresets, setShowPresets] = useState(false)
   const [statusData, setStatusData] = useState<{ chains: number; rules_count: number } | null>(null)
   const presetsRef = useRef<HTMLDivElement>(null)
@@ -177,7 +177,15 @@ export default function FirewallPage() {
     setMsg(null)
     try {
       const res = await applyFirewallRules()
-      setMsg({ type: 'success', text: res.message })
+      if (res.failed && res.failed.length > 0) {
+        setMsg({
+          type: 'error',
+          text: res.message,
+          details: res.failed.map((f) => `${f.name}: ${f.error}`),
+        })
+      } else {
+        setMsg({ type: 'success', text: res.message })
+      }
       getFirewallStatus().then(setStatusData).catch(() => {})
     } catch (err) {
       setMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to apply rules' })
@@ -257,11 +265,20 @@ export default function FirewallPage() {
 
       {/* Status banner */}
       {msg && (
-        <div className={`rounded-md border p-3 mb-4 text-[13px] flex items-center gap-2 ${
+        <div className={`rounded-md border p-3 mb-4 text-[13px] flex items-start gap-2 ${
           msg.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'
         }`}>
-          {msg.type === 'success' ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <AlertTriangle className="h-4 w-4 flex-shrink-0" />}
-          {msg.text}
+          {msg.type === 'success' ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
+          <div className="min-w-0">
+            <div>{msg.text}</div>
+            {msg.details && msg.details.length > 0 && (
+              <ul className="mt-1.5 space-y-1 list-disc pl-4">
+                {msg.details.map((d, i) => (
+                  <li key={i} className="break-words font-mono text-[12px]">{d}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 

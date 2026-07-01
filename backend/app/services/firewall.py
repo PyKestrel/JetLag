@@ -242,35 +242,69 @@ table inet jetlag {{
     # ── User-defined firewall rules ──────────────────────────────
 
     @staticmethod
-    async def apply_custom_rules(rules) -> None:
+    async def apply_custom_rules(rules) -> dict:
         """Flush and rebuild custom_forward / custom_input chains from DB rules.
 
         Rules are expected to be a list of FirewallRule model instances (or any
         object with the same attributes).
+
+        Returns a summary dict ``{"applied", "failed", "total"}`` where ``failed``
+        is a list of ``{"id", "name", "error"}`` so callers can surface exactly
+        which rules could not be applied and why.
         """
+        results: dict = {"applied": 0, "failed": [], "total": len(rules)}
+
         # Flush existing custom chains (create them if they don't exist yet)
         for chain in ("custom_forward", "custom_input"):
-            # Ensure chain exists
+            # Ensure chain exists (ignore "already exists" noise)
             await FirewallService._run(
                 f"nft add chain inet jetlag {chain} 2>/dev/null"
             )
-            # Flush it
-            await FirewallService._run(
+            # Flush it — a failure here usually means the base ruleset is missing
+            # (firewall not initialized), which would make every rule fail.
+            _, ferr, frc = await FirewallService._run(
                 f"nft flush chain inet jetlag {chain}"
             )
+            if frc != 0:
+                emsg = ferr.strip() or f"could not prepare chain {chain}"
+                logger.error(
+                    f"Firewall: cannot prepare chain {chain} "
+                    f"(is the base ruleset initialized?): {emsg}"
+                )
+                results["failed"].append(
+                    {"id": None, "name": f"chain:{chain}", "error": emsg}
+                )
 
         for rule in rules:
-            nft_rule = FirewallService._build_nft_rule(rule)
-            if nft_rule:
-                chain = "custom_input" if rule.direction == "inbound" else "custom_forward"
-                cmd = f'nft add rule inet jetlag {chain} {nft_rule}'
-                out, err, rc = await FirewallService._run(cmd)
-                if rc != 0:
-                    logger.error(f"Failed to apply rule {rule.id} ({rule.name}): {err}")
-                else:
-                    logger.debug(f"Applied rule {rule.id}: {cmd}")
+            nft_rule, build_err = FirewallService._build_nft_rule(rule)
+            if build_err:
+                logger.error(
+                    f"Firewall rule {rule.id} ({rule.name}) is invalid: {build_err}"
+                )
+                results["failed"].append(
+                    {"id": rule.id, "name": rule.name, "error": build_err}
+                )
+                continue
+            chain = "custom_input" if rule.direction == "inbound" else "custom_forward"
+            cmd = f'nft add rule inet jetlag {chain} {nft_rule}'
+            out, err, rc = await FirewallService._run(cmd)
+            if rc != 0:
+                emsg = err.strip() or "nft command failed"
+                logger.error(
+                    f"Failed to apply rule {rule.id} ({rule.name}): {emsg} | cmd: {cmd}"
+                )
+                results["failed"].append(
+                    {"id": rule.id, "name": rule.name, "error": emsg}
+                )
+            else:
+                results["applied"] += 1
+                logger.debug(f"Applied rule {rule.id}: {cmd}")
 
-        logger.info(f"Applied {len(rules)} custom firewall rules")
+        logger.info(
+            f"Firewall apply: {results['applied']}/{results['total']} rules applied, "
+            f"{len(results['failed'])} failed"
+        )
+        return results
 
     # ── Validation helpers (prevent shell/nft injection from DB values) ──
 
@@ -299,20 +333,22 @@ table inet jetlag {{
         return 0 < lo <= hi <= 65535
 
     @staticmethod
-    def _build_nft_rule(rule) -> Optional[str]:
+    def _build_nft_rule(rule) -> tuple[Optional[str], Optional[str]]:
         """Convert a FirewallRule model instance into an nftables rule string.
 
         All values originate from the database and are validated/escaped before
         interpolation so a malicious rule name or field can't inject nft/shell
-        syntax. Returns None if the rule is invalid and should be skipped.
+        syntax.
+
+        Returns a ``(rule_string, error)`` tuple: on success ``(str, None)``; if
+        the rule is invalid, ``(None, reason)`` so callers can surface why.
         """
         parts = []
 
         # Protocol match
         proto = getattr(rule, "protocol", "any") or "any"
         if proto not in ("tcp", "udp", "icmp", "any"):
-            logger.warning(f"Skipping rule {getattr(rule, 'id', '?')}: bad protocol {proto!r}")
-            return None
+            return None, f"invalid protocol {proto!r}"
         # A port match (e.g. "tcp dport 443") already implies the L4 protocol.
         # Only emit an explicit protocol match when no port match is present.
         has_port = bool((rule.src_port or rule.dst_port) and proto in ("tcp", "udp"))
@@ -324,36 +360,31 @@ table inet jetlag {{
         # Source IP
         if rule.src_ip:
             if not FirewallService._valid_ip(rule.src_ip):
-                logger.warning(f"Skipping rule {rule.id}: invalid src_ip {rule.src_ip!r}")
-                return None
+                return None, f"invalid source IP {rule.src_ip!r}"
             parts.append(f"ip saddr {rule.src_ip}")
 
         # Destination IP
         if rule.dst_ip:
             if not FirewallService._valid_ip(rule.dst_ip):
-                logger.warning(f"Skipping rule {rule.id}: invalid dst_ip {rule.dst_ip!r}")
-                return None
+                return None, f"invalid destination IP {rule.dst_ip!r}"
             parts.append(f"ip daddr {rule.dst_ip}")
 
         # Source port (requires tcp/udp)
         if rule.src_port and proto in ("tcp", "udp"):
             if not FirewallService._valid_port(rule.src_port):
-                logger.warning(f"Skipping rule {rule.id}: invalid src_port {rule.src_port!r}")
-                return None
+                return None, f"invalid source port {rule.src_port!r}"
             parts.append(f"{proto} sport {rule.src_port}")
 
         # Destination port (requires tcp/udp)
         if rule.dst_port and proto in ("tcp", "udp"):
             if not FirewallService._valid_port(rule.dst_port):
-                logger.warning(f"Skipping rule {rule.id}: invalid dst_port {rule.dst_port!r}")
-                return None
+                return None, f"invalid destination port {rule.dst_port!r}"
             parts.append(f"{proto} dport {rule.dst_port}")
 
         # Action
         action = getattr(rule, "action", "drop") or "drop"
         if action not in ("accept", "drop", "reject"):
-            logger.warning(f"Skipping rule {rule.id}: bad action {action!r}")
-            return None
+            return None, f"invalid action {action!r}"
         parts.append(action)
 
         # Comment — strip to an allowlisted character set
@@ -363,7 +394,7 @@ table inet jetlag {{
             if safe:
                 parts.append(f'comment "{safe}"')
 
-        return " ".join(parts)
+        return " ".join(parts), None
 
     @staticmethod
     async def get_ruleset_summary() -> dict:
