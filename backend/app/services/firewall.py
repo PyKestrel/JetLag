@@ -313,8 +313,13 @@ table inet jetlag {{
         if proto not in ("tcp", "udp", "icmp", "any"):
             logger.warning(f"Skipping rule {getattr(rule, 'id', '?')}: bad protocol {proto!r}")
             return None
-        if proto != "any":
-            parts.append(f"{proto}")
+        # A port match (e.g. "tcp dport 443") already implies the L4 protocol.
+        # Only emit an explicit protocol match when no port match is present.
+        has_port = bool((rule.src_port or rule.dst_port) and proto in ("tcp", "udp"))
+        if proto != "any" and not has_port:
+            # In an `inet` table, protocol matching must go through meta l4proto;
+            # a bare "tcp"/"udp"/"icmp" token is invalid nftables syntax.
+            parts.append(f"meta l4proto {proto}")
 
         # Source IP
         if rule.src_ip:
