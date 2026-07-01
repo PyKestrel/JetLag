@@ -286,19 +286,22 @@ table inet jetlag {{
                 )
                 continue
             chain = "custom_input" if rule.direction == "inbound" else "custom_forward"
-            cmd = f'nft add rule inet jetlag {chain} {nft_rule}'
-            out, err, rc = await FirewallService._run(cmd)
+            # Apply via `nft -f <file>` (not the shell) so values containing
+            # spaces or special characters — e.g. a comment "Block UDP" — are
+            # lexed by nft itself and not mangled by shell quote-stripping.
+            script = f"add rule inet jetlag {chain} {nft_rule}\n"
+            out, err, rc = await FirewallService._apply_ruleset(script)
             if rc != 0:
                 emsg = err.strip() or "nft command failed"
                 logger.error(
-                    f"Failed to apply rule {rule.id} ({rule.name}): {emsg} | cmd: {cmd}"
+                    f"Failed to apply rule {rule.id} ({rule.name}): {emsg} | rule: {nft_rule}"
                 )
                 results["failed"].append(
                     {"id": rule.id, "name": rule.name, "error": emsg}
                 )
             else:
                 results["applied"] += 1
-                logger.debug(f"Applied rule {rule.id}: {cmd}")
+                logger.debug(f"Applied rule {rule.id} to {chain}: {nft_rule}")
 
         logger.info(
             f"Firewall apply: {results['applied']}/{results['total']} rules applied, "
