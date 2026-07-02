@@ -21,13 +21,30 @@ fail() { echo -e "${RED}[fail]${NC} $*"; exit 1; }
 # ── Pre-flight checks ──────────────────────────────────────────────
 log "Checking prerequisites..."
 
-command -v python3 >/dev/null 2>&1 || fail "python3 not found. Install Python 3.11+."
-command -v node    >/dev/null 2>&1 || fail "node not found. Install Node.js 20+."
-command -v npm     >/dev/null 2>&1 || fail "npm not found. Install Node.js 20+."
+# Select a supported Python interpreter. pydantic-core's bundled PyO3 does not
+# support Python 3.14+, so the venv MUST be built with 3.11–3.13. We prefer an
+# explicitly-versioned binary and fall back to `python3` only if it is in range.
+pick_python() {
+    local candidate ver major minor
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        ver=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+        major=${ver%%.*}; minor=${ver##*.}
+        if [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 13 ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
-PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PYTHON_BIN="$(pick_python)" || fail "No supported Python found. Need Python 3.11–3.13 (3.14+ not yet supported by pydantic-core/PyO3). Install one, e.g.: sudo apt-get install python3.13 python3.13-venv"
+command -v node >/dev/null 2>&1 || fail "node not found. Install Node.js 20+."
+command -v npm  >/dev/null 2>&1 || fail "npm not found. Install Node.js 20+."
+
+PYTHON_VER=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 NODE_VER=$(node -v | sed 's/v//')
-ok "Python ${PYTHON_VER}, Node ${NODE_VER}"
+ok "Python ${PYTHON_VER} (${PYTHON_BIN}), Node ${NODE_VER}"
 
 # ── Install system packages if missing (Linux only) ───────────────
 if [[ "$(uname)" == "Linux" ]]; then
@@ -70,9 +87,20 @@ log "Setting up backend..."
 
 cd "$BACKEND_DIR"
 
+# Rebuild the venv if it was created with an unsupported Python (e.g. 3.14),
+# otherwise `pip install` will keep trying to compile pydantic-core and fail.
+if [[ -d "venv" ]]; then
+    VENV_VER=$(venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+    VENV_MINOR=${VENV_VER##*.}
+    if ! [[ "${VENV_VER%%.*}" == "3" && "$VENV_MINOR" =~ ^[0-9]+$ && "$VENV_MINOR" -ge 11 && "$VENV_MINOR" -le 13 ]]; then
+        log "Existing venv uses unsupported Python '${VENV_VER:-unknown}' — rebuilding with ${PYTHON_VER}..."
+        rm -rf venv
+    fi
+fi
+
 if [[ ! -d "venv" ]]; then
-    log "Creating Python virtual environment..."
-    python3 -m venv venv
+    log "Creating Python virtual environment (${PYTHON_BIN} → ${PYTHON_VER})..."
+    "$PYTHON_BIN" -m venv venv
 fi
 
 source venv/bin/activate

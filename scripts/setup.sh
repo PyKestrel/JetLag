@@ -105,8 +105,43 @@ echo "  nftables enabled. Firewall rules will be applied by JetLag backend."
 # --- Setup Python backend ---
 echo "[8/8] Setting up Python backend..."
 cd "${PROJECT_DIR}/backend"
+
+# Select a supported Python interpreter. pydantic-core's bundled PyO3 does not
+# support Python 3.14+, so the venv MUST be built with 3.11–3.13.
+pick_python() {
+    local candidate ver major minor
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        ver=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+        major=${ver%%.*}; minor=${ver##*.}
+        if [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 13 ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PYTHON_BIN="$(pick_python)" || {
+    echo "ERROR: No supported Python found. Need Python 3.11–3.13 (3.14+ not yet supported by pydantic-core/PyO3)."
+    echo "Install one, e.g.: apt-get install python3.13 python3.13-venv"
+    exit 1
+}
+PYTHON_VER=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+echo "  Using ${PYTHON_BIN} (Python ${PYTHON_VER})"
+
+# Rebuild the venv if it was created with an unsupported Python (e.g. 3.14).
+if [[ -d "venv" ]]; then
+    VENV_VER=$(venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+    VENV_MINOR=${VENV_VER##*.}
+    if ! [[ "${VENV_VER%%.*}" == "3" && "$VENV_MINOR" =~ ^[0-9]+$ && "$VENV_MINOR" -ge 11 && "$VENV_MINOR" -le 13 ]]; then
+        echo "  Existing venv uses unsupported Python '${VENV_VER:-unknown}' — rebuilding with ${PYTHON_VER}..."
+        rm -rf venv
+    fi
+fi
+
 if [[ ! -d "venv" ]]; then
-    python3 -m venv venv
+    "$PYTHON_BIN" -m venv venv
 fi
 source venv/bin/activate
 pip install -q -r requirements.txt
