@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, RotateCcw, CheckCircle2, AlertTriangle, Plus, Trash2, Network, Wifi } from 'lucide-react'
+import { Save, RotateCcw, CheckCircle2, AlertTriangle, Plus, Trash2, Pencil, Network, Wifi } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import { Switch } from '@/components/ui/Switch'
 import {
@@ -7,8 +7,10 @@ import {
   updateSettings,
   listPorts,
   addWANPort,
+  editWANPort,
   removeWANPort,
   addLANPort,
+  editLANPort,
   removeLANPort,
   getSetupInterfaces,
   type SettingsData,
@@ -110,6 +112,11 @@ export default function SettingsPage() {
   const [newWanMtu, setNewWanMtu] = useState('')
   const [newLan, setNewLan] = useState({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', mtu: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
   const [portMsg, setPortMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  // Edit state: identifier of the port currently being edited (interface for WAN, effective iface for LAN)
+  const [editingWan, setEditingWan] = useState<string | null>(null)
+  const [editWan, setEditWan] = useState({ enabled: true, mtu: '' })
+  const [editingLan, setEditingLan] = useState<string | null>(null)
+  const [editLan, setEditLan] = useState({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', mtu: '', enabled: true, dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '', dhcp_lease_time: '1h' })
 
   useEffect(() => {
     if (data) {
@@ -208,6 +215,70 @@ export default function SettingsPage() {
       setPortMsg({ type: 'success', text: `LAN port ${iface} removed` })
     } catch (err) {
       setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to remove LAN port' })
+    }
+  }
+
+  const startEditWan = (p: WANPort) => {
+    setEditingWan(p.interface)
+    setEditWan({ enabled: p.enabled, mtu: p.mtu != null ? String(p.mtu) : '' })
+    setPortMsg(null)
+  }
+
+  const handleSaveEditWan = async (iface: string) => {
+    setPortMsg(null)
+    try {
+      const res = await editWANPort(iface, {
+        enabled: editWan.enabled,
+        mtu: editWan.mtu ? Number(editWan.mtu) : null,
+      })
+      setWanPorts(res.wan_ports)
+      setEditingWan(null)
+      setPortMsg({ type: 'success', text: `WAN port ${iface} updated` })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to update WAN port' })
+    }
+  }
+
+  const startEditLan = (p: LANPort) => {
+    setEditingLan(p.vlan_id ? `${p.interface}.${p.vlan_id}` : p.interface)
+    setEditLan({
+      interface: p.interface,
+      ip: p.ip,
+      subnet: p.subnet,
+      vlan_id: p.vlan_id != null ? String(p.vlan_id) : '',
+      vlan_name: p.vlan_name || '',
+      mtu: p.mtu != null ? String(p.mtu) : '',
+      enabled: p.enabled,
+      dhcp_enabled: p.dhcp.enabled,
+      dhcp_range_start: p.dhcp.range_start || '',
+      dhcp_range_end: p.dhcp.range_end || '',
+      dhcp_lease_time: p.dhcp.lease_time || '1h',
+    })
+    setPortMsg(null)
+  }
+
+  const handleSaveEditLan = async (iface: string) => {
+    if (!editLan.interface || !editLan.ip || !editLan.subnet) return
+    setPortMsg(null)
+    try {
+      const res = await editLANPort(iface, {
+        interface: editLan.interface,
+        ip: editLan.ip,
+        subnet: editLan.subnet,
+        vlan_id: editLan.vlan_id ? Number(editLan.vlan_id) : undefined,
+        vlan_name: editLan.vlan_name || undefined,
+        mtu: editLan.mtu ? Number(editLan.mtu) : undefined,
+        enabled: editLan.enabled,
+        dhcp_enabled: editLan.dhcp_enabled,
+        dhcp_range_start: editLan.dhcp_range_start || undefined,
+        dhcp_range_end: editLan.dhcp_range_end || undefined,
+        dhcp_lease_time: editLan.dhcp_lease_time || undefined,
+      })
+      setLanPorts(res.lan_ports)
+      setEditingLan(null)
+      setPortMsg({ type: 'success', text: 'LAN port updated' })
+    } catch (err) {
+      setPortMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to update LAN port' })
     }
   }
 
@@ -362,19 +433,43 @@ export default function SettingsPage() {
         <Section title="WAN Ports" description="Upstream (internet-facing) interfaces">
           <div className="space-y-2">
             {wanPorts.map((p) => (
-              <div key={p.interface} className="flex items-center justify-between px-3 py-2 rounded-md border border-border bg-background">
-                <div className="flex items-center gap-2">
-                  <Network className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-[13px] font-medium text-foreground">{p.interface}</span>
-                  <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${p.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                    {p.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                  {p.mtu && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">MTU {p.mtu}</span>}
+              editingWan === p.interface ? (
+                <div key={p.interface} className="flex items-end gap-2 px-3 py-3 rounded-md border border-primary/40 bg-background">
+                  <div className="flex items-center gap-2 flex-1">
+                    <Network className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-[13px] font-medium text-foreground">{p.interface}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch checked={editWan.enabled} onCheckedChange={(v) => setEditWan({ ...editWan, enabled: v })} />
+                    <span className="text-[12px] text-muted-foreground">Enabled</span>
+                  </div>
+                  <div className="w-28">
+                    <label className="text-[12px] font-medium text-muted-foreground mb-1 block">MTU <span className="font-normal">(optional)</span></label>
+                    <input type="number" min={576} max={9216} value={editWan.mtu} onChange={(e) => setEditWan({ ...editWan, mtu: e.target.value })} placeholder="1500" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                  </div>
+                  <button onClick={() => handleSaveEditWan(p.interface)} className="px-3 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">Save</button>
+                  <button onClick={() => setEditingWan(null)} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
                 </div>
-                <button onClick={() => handleRemoveWan(p.interface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
+              ) : (
+                <div key={p.interface} className="flex items-center justify-between px-3 py-2 rounded-md border border-border bg-background">
+                  <div className="flex items-center gap-2">
+                    <Network className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-[13px] font-medium text-foreground">{p.interface}</span>
+                    <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${p.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                      {p.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    {p.mtu && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">MTU {p.mtu}</span>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => startEditWan(p)} className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title="Edit">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button onClick={() => handleRemoveWan(p.interface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )
             ))}
             {wanPorts.length === 0 && <p className="text-[12px] text-muted-foreground">No WAN ports configured.</p>}
           </div>
@@ -406,6 +501,65 @@ export default function SettingsPage() {
           <div className="space-y-3">
             {lanPorts.map((p) => {
               const effIface = p.vlan_id ? `${p.interface}.${p.vlan_id}` : p.interface
+              if (editingLan === effIface) {
+                return (
+                  <div key={effIface} className="rounded-md border border-primary/40 bg-background p-4 space-y-3">
+                    <p className="text-[13px] font-semibold text-foreground">Edit LAN Port <span className="font-normal text-muted-foreground">({effIface})</span></p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Interface</label>
+                        <select value={editLan.interface} onChange={(e) => setEditLan({ ...editLan, interface: e.target.value })} className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring">
+                          <option value="">Select interface...</option>
+                          {editLan.interface && !availableIfaces.some((i) => i.name === editLan.interface) && <option value={editLan.interface}>{editLan.interface}</option>}
+                          {availableIfaces.map((i) => <option key={i.name} value={i.name}>{i.name} ({i.state})</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">IP Address</label>
+                        <input type="text" value={editLan.ip} onChange={(e) => setEditLan({ ...editLan, ip: e.target.value })} placeholder="10.0.2.1" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">Subnet</label>
+                        <input type="text" value={editLan.subnet} onChange={(e) => setEditLan({ ...editLan, subnet: e.target.value })} placeholder="10.0.2.0/24" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">VLAN ID <span className="font-normal text-muted-foreground">(optional)</span></label>
+                        <input type="number" min={1} max={4094} value={editLan.vlan_id} onChange={(e) => setEditLan({ ...editLan, vlan_id: e.target.value })} placeholder="100" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">VLAN Name <span className="font-normal text-muted-foreground">(optional)</span></label>
+                        <input type="text" value={editLan.vlan_name} onChange={(e) => setEditLan({ ...editLan, vlan_name: e.target.value })} placeholder="Guest WiFi" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">MTU <span className="font-normal text-muted-foreground">(optional)</span></label>
+                        <input type="number" min={576} max={9216} value={editLan.mtu} onChange={(e) => setEditLan({ ...editLan, mtu: e.target.value })} placeholder="1500" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">DHCP Range Start</label>
+                        <input type="text" value={editLan.dhcp_range_start} onChange={(e) => setEditLan({ ...editLan, dhcp_range_start: e.target.value })} placeholder="Auto" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                      <div>
+                        <label className="text-[12px] font-medium text-muted-foreground mb-1 block">DHCP Range End</label>
+                        <input type="text" value={editLan.dhcp_range_end} onChange={(e) => setEditLan({ ...editLan, dhcp_range_end: e.target.value })} placeholder="Auto" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 pt-1">
+                      <label className="flex items-center gap-2">
+                        <Switch checked={editLan.enabled} onCheckedChange={(v) => setEditLan({ ...editLan, enabled: v })} />
+                        <span className="text-[12px] text-muted-foreground">Enabled</span>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <Switch checked={editLan.dhcp_enabled} onCheckedChange={(v) => setEditLan({ ...editLan, dhcp_enabled: v })} />
+                        <span className="text-[12px] text-muted-foreground">DHCP</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button onClick={() => handleSaveEditLan(effIface)} disabled={!editLan.interface || !editLan.ip || !editLan.subnet} className="px-3 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors">Save</button>
+                      <button onClick={() => setEditingLan(null)} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
+                    </div>
+                  </div>
+                )
+              }
               return (
                 <div key={effIface} className="rounded-md border border-border bg-background">
                   <div className="flex items-center justify-between px-3 py-2">
@@ -417,9 +571,14 @@ export default function SettingsPage() {
                         {p.enabled ? 'Enabled' : 'Disabled'}
                       </span>
                     </div>
-                    <button onClick={() => handleRemoveLan(effIface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => startEditLan(p)} className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title="Edit">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => handleRemoveLan(effIface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <div className="px-3 pb-2 grid grid-cols-4 gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
                     <span><strong>IP:</strong> {p.ip}</span>

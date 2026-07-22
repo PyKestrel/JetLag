@@ -715,6 +715,45 @@ async def remove_wan_port(interface: str):
     return {"message": f"WAN port {interface} removed", "wan_ports": [p.model_dump() for p in settings.wan_ports]}
 
 
+class EditWANPortRequest(BaseModel):
+    enabled: bool = True
+    mtu: int | None = None
+
+    @field_validator("mtu")
+    @classmethod
+    def _check_mtu(cls, v):
+        return validate_mtu(v)
+
+
+@router.put("/ports/wan/{interface}")
+async def edit_wan_port(interface: str, payload: EditWANPortRequest):
+    """Update an existing WAN port's settings (enabled state and MTU)."""
+    port = next((p for p in settings.wan_ports if p.interface == interface), None)
+    if port is None:
+        raise HTTPException(status_code=404, detail=f"WAN port {interface} not found")
+
+    port.enabled = payload.enabled
+    port.mtu = payload.mtu
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    if settings.setup_completed and platform.system() == "Linux":
+        try:
+            await _configure_wan_port(port)
+        except Exception as e:
+            logger.error(f"Failed to reconfigure WAN port {interface}: {e}")
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after editing WAN port: {e}")
+
+    logger.info(f"WAN port updated: {interface}")
+    return {"message": f"WAN port {interface} updated", "wan_ports": [p.model_dump() for p in settings.wan_ports]}
+
+
 @router.post("/ports/lan")
 async def add_lan_port(payload: AddLANPortRequest):
     """Add a new LAN port (optionally with a VLAN tag) to the configuration."""
@@ -810,6 +849,90 @@ async def remove_lan_port(interface: str):
 
     logger.info(f"LAN port removed: {interface}")
     return {"message": f"LAN port {interface} removed", "lan_ports": [p.model_dump() for p in settings.lan_ports]}
+
+
+@router.put("/ports/lan/{interface}")
+async def edit_lan_port(interface: str, payload: AddLANPortRequest):
+    """Update an existing LAN port.
+
+    ``{interface}`` is the port's *current* effective interface name
+    (e.g. ``eth1`` or ``eth1.100`` for a VLAN sub-interface). The request
+    body fully replaces the port's settings.
+    """
+    idx = next(
+        (i for i, p in enumerate(settings.lan_ports) if p.effective_interface == interface),
+        None,
+    )
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"LAN port {interface} not found")
+
+    old = settings.lan_ports[idx]
+    new_effective = f"{payload.interface}.{payload.vlan_id}" if payload.vlan_id else payload.interface
+
+    # Prevent collision with a different existing port
+    for i, p in enumerate(settings.lan_ports):
+        if i != idx and p.effective_interface == new_effective:
+            raise HTTPException(status_code=400, detail=f"LAN port {new_effective} already exists")
+
+    dhcp = PortDHCPConfig(
+        enabled=payload.dhcp_enabled,
+        range_start=payload.dhcp_range_start or payload.ip.rsplit(".", 1)[0] + ".100",
+        range_end=payload.dhcp_range_end or payload.ip.rsplit(".", 1)[0] + ".250",
+        lease_time=payload.dhcp_lease_time,
+        gateway=payload.ip,
+        dns_server=payload.ip,
+    )
+
+    new_port = LANPort(
+        interface=payload.interface,
+        ip=payload.ip,
+        subnet=payload.subnet,
+        vlan_id=payload.vlan_id,
+        vlan_name=payload.vlan_name,
+        enabled=payload.enabled,
+        mtu=payload.mtu,
+        dhcp=dhcp,
+    )
+    settings.lan_ports[idx] = new_port
+
+    try:
+        _persist_config()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    if settings.setup_completed and platform.system() == "Linux":
+        # If the effective interface changed, clean up the old one first
+        if old.effective_interface != new_effective:
+            if old.vlan_id is not None:
+                try:
+                    subprocess.run(
+                        ["ip", "link", "delete", old.effective_interface],
+                        capture_output=True, timeout=5,
+                    )
+                    logger.info(f"Old VLAN sub-interface {old.effective_interface} removed")
+                except Exception as e:
+                    logger.error(f"Failed to remove old VLAN sub-interface {old.effective_interface}: {e}")
+            else:
+                await _run_cmd(f"ip addr flush dev {old.effective_interface} 2>/dev/null")
+
+        try:
+            await _configure_lan_port(new_port)
+        except Exception as e:
+            logger.error(f"Failed to reconfigure LAN port {new_effective}: {e}")
+
+        try:
+            await DnsmasqService.generate_config()
+            await DnsmasqService.restart()
+        except Exception as e:
+            logger.error(f"Failed to reload dnsmasq after editing LAN port: {e}")
+
+        try:
+            await FirewallService.initialize()
+        except Exception as e:
+            logger.error(f"Failed to reload firewall after editing LAN port: {e}")
+
+    logger.info(f"LAN port updated: {interface} -> {new_effective}")
+    return {"message": f"LAN port {new_effective} updated", "lan_ports": [p.model_dump() for p in settings.lan_ports]}
 
 
 @router.get("/ports")

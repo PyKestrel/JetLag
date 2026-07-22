@@ -208,10 +208,14 @@ export const updateUpdateConfig = (data: Partial<UpdateConfig>) =>
 export const listPorts = () => request<{ wan_ports: WANPort[]; lan_ports: LANPort[] }>('/setup/ports');
 export const addWANPort = (data: { interface: string; enabled?: boolean; mtu?: number | null }) =>
   request<{ message: string; wan_ports: WANPort[] }>('/setup/ports/wan', { method: 'POST', body: JSON.stringify(data) });
+export const editWANPort = (iface: string, data: { enabled?: boolean; mtu?: number | null }) =>
+  request<{ message: string; wan_ports: WANPort[] }>(`/setup/ports/wan/${iface}`, { method: 'PUT', body: JSON.stringify(data) });
 export const removeWANPort = (iface: string) =>
   request<{ message: string; wan_ports: WANPort[] }>(`/setup/ports/wan/${iface}`, { method: 'DELETE' });
 export const addLANPort = (data: AddLANPortRequest) =>
   request<{ message: string; lan_ports: LANPort[] }>('/setup/ports/lan', { method: 'POST', body: JSON.stringify(data) });
+export const editLANPort = (iface: string, data: AddLANPortRequest) =>
+  request<{ message: string; lan_ports: LANPort[] }>(`/setup/ports/lan/${iface}`, { method: 'PUT', body: JSON.stringify(data) });
 export const removeLANPort = (iface: string) =>
   request<{ message: string; lan_ports: LANPort[] }>(`/setup/ports/lan/${iface}`, { method: 'DELETE' });
 
