@@ -367,6 +367,17 @@ class HostapdService:
             logger.error(f"Failed to assign IP to {iface}: {err}")
             return False
 
+        # Apply optional MTU before bringing the link up. Non-fatal: a bad
+        # value shouldn't stop the AP from coming online.
+        if cfg.mtu is not None:
+            _, mtu_err, mtu_rc = await HostapdService._run(
+                f"ip link set dev {iface} mtu {int(cfg.mtu)}"
+            )
+            if mtu_rc != 0:
+                logger.warning(f"Failed to set MTU {cfg.mtu} on {iface}: {mtu_err or 'unknown error'}")
+            else:
+                logger.info(f"Set MTU {cfg.mtu} on {iface}")
+
         # Bring up interface.  In hotspot mode the interface should already
         # be UP from _create_virtual_ap(), but bring it up anyway to be safe.
         out, err, rc = await HostapdService._run(f"ip link set {iface} up")

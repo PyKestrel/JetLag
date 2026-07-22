@@ -107,7 +107,8 @@ export default function SettingsPage() {
   const [showAddWan, setShowAddWan] = useState(false)
   const [showAddLan, setShowAddLan] = useState(false)
   const [newWanIface, setNewWanIface] = useState('')
-  const [newLan, setNewLan] = useState({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
+  const [newWanMtu, setNewWanMtu] = useState('')
+  const [newLan, setNewLan] = useState({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', mtu: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
   const [portMsg, setPortMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
@@ -135,9 +136,10 @@ export default function SettingsPage() {
     if (!newWanIface) return
     setPortMsg(null)
     try {
-      const res = await addWANPort({ interface: newWanIface })
+      const res = await addWANPort({ interface: newWanIface, mtu: newWanMtu ? Number(newWanMtu) : undefined })
       setWanPorts(res.wan_ports)
       setNewWanIface('')
+      setNewWanMtu('')
       setShowAddWan(false)
       setPortMsg({ type: 'success', text: `WAN port ${newWanIface} added` })
     } catch (err) {
@@ -167,12 +169,13 @@ export default function SettingsPage() {
         subnet: newLan.subnet,
         vlan_id: newLan.vlan_id ? Number(newLan.vlan_id) : undefined,
         vlan_name: newLan.vlan_name || undefined,
+        mtu: newLan.mtu ? Number(newLan.mtu) : undefined,
         dhcp_enabled: newLan.dhcp_enabled,
         dhcp_range_start: newLan.dhcp_range_start || undefined,
         dhcp_range_end: newLan.dhcp_range_end || undefined,
       })
       setLanPorts(res.lan_ports)
-      setNewLan({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
+      setNewLan({ interface: '', ip: '', subnet: '', vlan_id: '', vlan_name: '', mtu: '', dhcp_enabled: true, dhcp_range_start: '', dhcp_range_end: '' })
       setShowAddLan(false)
       setPortMsg({ type: 'success', text: 'LAN port added' })
     } catch (err) {
@@ -366,6 +369,7 @@ export default function SettingsPage() {
                   <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${p.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                     {p.enabled ? 'Enabled' : 'Disabled'}
                   </span>
+                  {p.mtu && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">MTU {p.mtu}</span>}
                 </div>
                 <button onClick={() => handleRemoveWan(p.interface)} className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors" title="Remove">
                   <Trash2 className="h-3.5 w-3.5" />
@@ -382,6 +386,10 @@ export default function SettingsPage() {
                   <option value="">Select interface...</option>
                   {availableIfaces.map((i) => <option key={i.name} value={i.name}>{i.name} ({i.state})</option>)}
                 </select>
+              </div>
+              <div className="w-28">
+                <label className="text-[12px] font-medium text-muted-foreground mb-1 block">MTU <span className="font-normal">(optional)</span></label>
+                <input type="number" min={576} max={9216} value={newWanMtu} onChange={(e) => setNewWanMtu(e.target.value)} placeholder="1500" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <button onClick={handleAddWan} disabled={!newWanIface} className="px-3 py-[7px] text-[13px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors">Add</button>
               <button onClick={() => setShowAddWan(false)} className="px-3 py-[7px] text-[13px] font-medium rounded-md border border-border hover:bg-accent transition-colors">Cancel</button>
@@ -418,6 +426,7 @@ export default function SettingsPage() {
                     <span><strong>Subnet:</strong> {p.subnet}</span>
                     <span><strong>DHCP:</strong> {p.dhcp.enabled ? `${p.dhcp.range_start || p.ip.replace(/\.\d+$/, '.100')} – ${p.dhcp.range_end || p.ip.replace(/\.\d+$/, '.250')}` : 'Off'}</span>
                     <span><strong>Lease:</strong> {p.dhcp.lease_time}</span>
+                    {p.mtu && <span><strong>MTU:</strong> {p.mtu}</span>}
                   </div>
                 </div>
               )
@@ -450,6 +459,10 @@ export default function SettingsPage() {
                 <div>
                   <label className="text-[12px] font-medium text-muted-foreground mb-1 block">VLAN Name <span className="font-normal text-muted-foreground">(optional)</span></label>
                   <input type="text" value={newLan.vlan_name} onChange={(e) => setNewLan({ ...newLan, vlan_name: e.target.value })} placeholder="Guest WiFi" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
+                </div>
+                <div>
+                  <label className="text-[12px] font-medium text-muted-foreground mb-1 block">MTU <span className="font-normal text-muted-foreground">(optional)</span></label>
+                  <input type="number" min={576} max={9216} value={newLan.mtu} onChange={(e) => setNewLan({ ...newLan, mtu: e.target.value })} placeholder="1500" className="w-full px-3 py-[7px] rounded-md border border-input bg-background text-foreground text-[13px] focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="text-[12px] font-medium text-muted-foreground mb-1 block">DHCP Range Start</label>

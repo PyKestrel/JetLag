@@ -8,9 +8,12 @@ from typing import Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.config import settings, NetworkConfig, DHCPConfig, DNSConfig, WANPort, LANPort, PortDHCPConfig, WirelessConfig
+from app.config import (
+    settings, NetworkConfig, DHCPConfig, DNSConfig, WANPort, LANPort,
+    PortDHCPConfig, WirelessConfig, MTU_MIN, MTU_MAX, validate_mtu,
+)
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
 from app.services.impairment import ImpairmentService
@@ -325,8 +328,34 @@ async def _configure_lan_port(lp: LANPort):
 
     await _run_cmd(f"ip addr flush dev {iif}")
     await _run_cmd(f"ip addr add {lp.ip}/{prefix_len} dev {iif}")
+    await _set_mtu(iif, lp.mtu)
     await _run_cmd(f"ip link set {iif} up")
     logger.info(f"LAN port {iif} configured with {lp.ip}/{prefix_len}")
+
+
+async def _set_mtu(iface: str, mtu: Optional[int]) -> None:
+    """Set the link MTU on *iface* if configured. No-op when ``mtu`` is None.
+
+    Logs (but does not raise) on failure so a bad MTU never aborts the rest
+    of interface bring-up — e.g. a VLAN MTU larger than its parent's.
+    """
+    if mtu is None:
+        return
+    _, err, rc = await _run_cmd(f"ip link set dev {iface} mtu {int(mtu)}")
+    if rc != 0:
+        logger.warning(f"Failed to set MTU {mtu} on {iface}: {err or 'unknown error'}")
+    else:
+        logger.info(f"Set MTU {mtu} on {iface}")
+
+
+async def _configure_wan_port(wp: WANPort) -> None:
+    """Apply appliance-managed settings to a WAN uplink.
+
+    WAN interfaces are otherwise brought up by DHCP/NetworkManager, so the
+    only thing we enforce here is the optional MTU.
+    """
+    if wp.mtu is not None:
+        await _set_mtu(wp.interface, wp.mtu)
 
 
 async def _run_cmd(cmd: str) -> tuple[str, str, int]:
@@ -528,6 +557,14 @@ async def complete_setup(payload: SetupRequest):
                 logger.error(f"Failed to configure LAN port {lp.effective_interface}: {e}")
                 services_failed.append(f"lan:{lp.effective_interface}: {e}")
 
+        # 1a. Apply WAN-side settings (currently just MTU)
+        for wp in settings.wan_ports:
+            try:
+                await _configure_wan_port(wp)
+            except Exception as e:
+                logger.error(f"Failed to configure WAN port {wp.interface}: {e}")
+                services_failed.append(f"wan:{wp.interface}: {e}")
+
         # 1b. Start hostapd on the virtual AP interface (hotspot mode)
         if payload.hotspot_mode:
             try:
@@ -597,6 +634,12 @@ async def complete_setup(payload: SetupRequest):
 class AddWANPortRequest(BaseModel):
     interface: str
     enabled: bool = True
+    mtu: int | None = None
+
+    @field_validator("mtu")
+    @classmethod
+    def _check_mtu(cls, v):
+        return validate_mtu(v)
 
 
 class AddLANPortRequest(BaseModel):
@@ -606,10 +649,16 @@ class AddLANPortRequest(BaseModel):
     vlan_id: int | None = None
     vlan_name: str = ""
     enabled: bool = True
+    mtu: int | None = None
     dhcp_enabled: bool = True
     dhcp_range_start: str = ""
     dhcp_range_end: str = ""
     dhcp_lease_time: str = "1h"
+
+    @field_validator("mtu")
+    @classmethod
+    def _check_mtu(cls, v):
+        return validate_mtu(v)
 
 
 @router.post("/ports/wan")
@@ -620,7 +669,7 @@ async def add_wan_port(payload: AddWANPortRequest):
         if p.interface == payload.interface:
             raise HTTPException(status_code=400, detail=f"WAN port {payload.interface} already exists")
 
-    port = WANPort(interface=payload.interface, enabled=payload.enabled)
+    port = WANPort(interface=payload.interface, enabled=payload.enabled, mtu=payload.mtu)
     settings.wan_ports.append(port)
 
     try:
@@ -630,6 +679,10 @@ async def add_wan_port(payload: AddWANPortRequest):
 
     # Reload firewall to include new WAN port
     if settings.setup_completed and platform.system() == "Linux":
+        try:
+            await _configure_wan_port(port)
+        except Exception as e:
+            logger.error(f"Failed to configure new WAN port {port.interface}: {e}")
         try:
             await FirewallService.initialize()
         except Exception as e:
@@ -686,6 +739,7 @@ async def add_lan_port(payload: AddLANPortRequest):
         vlan_id=payload.vlan_id,
         vlan_name=payload.vlan_name,
         enabled=payload.enabled,
+        mtu=payload.mtu,
         dhcp=dhcp,
     )
     settings.lan_ports.append(port)

@@ -7,6 +7,27 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
+# ── MTU bounds ───────────────────────────────────────────────────
+# Minimum is the IPv4 minimum reassembly buffer; maximum covers common
+# jumbo-frame configs (9216) without allowing absurd values.
+MTU_MIN = 576
+MTU_MAX = 9216
+
+
+def validate_mtu(value: Optional[int]) -> Optional[int]:
+    """Return the MTU unchanged if valid, else raise ValueError.
+
+    ``None`` is allowed and means "leave the interface default untouched".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("MTU must be an integer")
+    if not (MTU_MIN <= value <= MTU_MAX):
+        raise ValueError(f"MTU must be between {MTU_MIN} and {MTU_MAX}")
+    return value
+
+
 # ── Port-level models ────────────────────────────────────────────
 
 class PortDHCPConfig(BaseModel):
@@ -23,6 +44,8 @@ class WANPort(BaseModel):
     """A single WAN (upstream) interface."""
     interface: str
     enabled: bool = True
+    # Optional link MTU. None = leave the driver/OS default untouched.
+    mtu: int | None = None
 
 
 class LANPort(BaseModel):
@@ -33,6 +56,8 @@ class LANPort(BaseModel):
     vlan_id: int | None = None  # if set, creates e.g. eth1.100
     vlan_name: str = ""        # human-readable label
     enabled: bool = True
+    # Optional link MTU. None = leave the driver/OS default untouched.
+    mtu: int | None = None
     dhcp: PortDHCPConfig = Field(default_factory=PortDHCPConfig)
 
     @property
@@ -163,6 +188,8 @@ class WirelessConfig(BaseModel):
     max_clients: int = 32
     # Hidden SSID
     hidden: bool = False
+    # Optional link MTU for the AP interface. None = leave driver/OS default.
+    mtu: int | None = None
 
 
 class CapturesConfig(BaseModel):

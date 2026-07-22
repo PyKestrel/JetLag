@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import settings
+from app.config import settings, validate_mtu
 from app.services.hostapd import HostapdService
 
 logger = logging.getLogger("jetlag.wireless_router")
@@ -43,6 +43,7 @@ class WirelessConfigUpdate(BaseModel):
     bridge_to_lan: Optional[bool] = None
     max_clients: Optional[int] = None
     hidden: Optional[bool] = None
+    mtu: Optional[int] = None
 
 
 class WirelessConfigResponse(BaseModel):
@@ -66,6 +67,7 @@ class WirelessConfigResponse(BaseModel):
     bridge_to_lan: bool
     max_clients: int
     hidden: bool
+    mtu: Optional[int] = None
 
 
 # ── Endpoints ────────────────────────────────────────────────────
@@ -111,6 +113,7 @@ async def get_config():
         bridge_to_lan=cfg.bridge_to_lan,
         max_clients=cfg.max_clients,
         hidden=cfg.hidden,
+        mtu=cfg.mtu,
     )
 
 
@@ -143,6 +146,13 @@ async def update_config(payload: WirelessConfigUpdate):
         ch = updates["channel"]
         if not (1 <= ch <= 196):
             raise HTTPException(422, f"Invalid channel: {ch}")
+
+    # Validate MTU
+    if "mtu" in updates:
+        try:
+            updates["mtu"] = validate_mtu(updates["mtu"])
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     # Apply updates to in-memory config
     for key, value in updates.items():

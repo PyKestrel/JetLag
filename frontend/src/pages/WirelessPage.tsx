@@ -100,7 +100,7 @@ export default function WirelessPage() {
     return () => clearInterval(interval)
   }, [fetchAll])
 
-  const handleChange = (field: string, value: string | number | boolean) => {
+  const handleChange = (field: string, value: string | number | boolean | null) => {
     setEditConfig((prev) => ({ ...prev, [field]: value }))
     setDirty(true)
     clearMessages()
@@ -417,6 +417,18 @@ export default function WirelessPage() {
                   max={255}
                   value={editConfig.max_clients ?? 10}
                   onChange={(e) => handleChange('max_clients', parseInt(e.target.value) || 10)}
+                  className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-muted-foreground">MTU <span className="text-muted-foreground/70">(blank = default)</span></span>
+                <input
+                  type="number"
+                  min={576}
+                  max={9216}
+                  value={editConfig.mtu ?? ''}
+                  onChange={(e) => handleChange('mtu', e.target.value === '' ? null : (parseInt(e.target.value) || null))}
+                  placeholder="1500"
                   className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 />
               </label>

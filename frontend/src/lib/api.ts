@@ -206,7 +206,7 @@ export const updateUpdateConfig = (data: Partial<UpdateConfig>) =>
 
 // Port management
 export const listPorts = () => request<{ wan_ports: WANPort[]; lan_ports: LANPort[] }>('/setup/ports');
-export const addWANPort = (data: { interface: string; enabled?: boolean }) =>
+export const addWANPort = (data: { interface: string; enabled?: boolean; mtu?: number | null }) =>
   request<{ message: string; wan_ports: WANPort[] }>('/setup/ports/wan', { method: 'POST', body: JSON.stringify(data) });
 export const removeWANPort = (iface: string) =>
   request<{ message: string; wan_ports: WANPort[] }>(`/setup/ports/wan/${iface}`, { method: 'DELETE' });
@@ -530,6 +530,7 @@ export interface PortDHCPConfig {
 export interface WANPort {
   interface: string;
   enabled: boolean;
+  mtu: number | null;
 }
 
 export interface LANPort {
@@ -539,6 +540,7 @@ export interface LANPort {
   vlan_id: number | null;
   vlan_name: string;
   enabled: boolean;
+  mtu: number | null;
   dhcp: PortDHCPConfig;
 }
 
@@ -549,6 +551,7 @@ export interface AddLANPortRequest {
   vlan_id?: number | null;
   vlan_name?: string;
   enabled?: boolean;
+  mtu?: number | null;
   dhcp_enabled?: boolean;
   dhcp_range_start?: string;
   dhcp_range_end?: string;
@@ -707,6 +710,7 @@ export interface WirelessConfig {
   bridge_to_lan: boolean;
   max_clients: number;
   hidden: boolean;
+  mtu: number | null;
 }
 
 export interface WirelessConfigUpdate {
@@ -730,6 +734,7 @@ export interface WirelessConfigUpdate {
   bridge_to_lan?: boolean;
   max_clients?: number;
   hidden?: boolean;
+  mtu?: number | null;
 }
 
 export interface WlanInterface {
