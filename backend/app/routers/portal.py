@@ -1,9 +1,7 @@
 import datetime
-import os
-from pathlib import Path
+import secrets
 from typing import Optional
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,32 +12,9 @@ from app.models.client import Client, AuthState
 from app.services.firewall import FirewallService
 from app.services.logging_service import LoggingService
 from app.services.network import NetworkService
-from app.config import settings
+from app.config import settings, config_lock, persist_config
 
 router = APIRouter(prefix="/api/portal", tags=["portal"])
-
-
-def _jetlag_yaml_path() -> Path:
-    return Path(
-        os.environ.get(
-            "JETLAG_CONFIG",
-            str(Path(__file__).resolve().parent.parent.parent.parent / "config" / "jetlag.yaml"),
-        )
-    )
-
-
-def _persist_portal_to_yaml() -> None:
-    """Merge `settings.portal` into jetlag.yaml so portal type survives restarts."""
-    path = _jetlag_yaml_path()
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-    else:
-        raw = {}
-    raw["portal"] = settings.portal.model_dump()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -137,31 +112,36 @@ class PortalConfigUpdate(BaseModel):
 
 @router.put("/config")
 async def update_portal_config(payload: PortalConfigUpdate):
-    """Update portal configuration at runtime."""
-    p = settings.portal
-    if payload.portal_type is not None:
-        valid_types = {"click_through", "web_login", "tiered", "time_limited", "walled_garden"}
-        if payload.portal_type not in valid_types:
-            raise HTTPException(422, f"Invalid portal_type. Must be one of: {valid_types}")
-        p.portal_type = payload.portal_type
-    if payload.login_username is not None:
-        p.login_username = payload.login_username
-    if payload.login_password is not None:
-        p.login_password = payload.login_password
-    if payload.session_duration_minutes is not None:
-        p.session_duration_minutes = payload.session_duration_minutes
-    if payload.tiered_plans is not None:
-        p.tiered_plans = payload.tiered_plans
-    if payload.walled_garden_domains is not None:
-        p.walled_garden_domains = payload.walled_garden_domains
-    if payload.redirect_url is not None:
-        p.redirect_url = payload.redirect_url
-    if payload.welcome_message is not None:
-        p.welcome_message = payload.welcome_message
-    try:
-        _persist_portal_to_yaml()
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save portal config: {e}") from e
+    """Update portal configuration at runtime.
+
+    Guarded by ``config_lock`` and persisted through the centralized atomic
+    writer so it can't race with (or clobber) other config writers.
+    """
+    async with config_lock:
+        p = settings.portal
+        if payload.portal_type is not None:
+            valid_types = {"click_through", "web_login", "tiered", "time_limited", "walled_garden"}
+            if payload.portal_type not in valid_types:
+                raise HTTPException(422, f"Invalid portal_type. Must be one of: {valid_types}")
+            p.portal_type = payload.portal_type
+        if payload.login_username is not None:
+            p.login_username = payload.login_username
+        if payload.login_password is not None:
+            p.login_password = payload.login_password
+        if payload.session_duration_minutes is not None:
+            p.session_duration_minutes = payload.session_duration_minutes
+        if payload.tiered_plans is not None:
+            p.tiered_plans = payload.tiered_plans
+        if payload.walled_garden_domains is not None:
+            p.walled_garden_domains = payload.walled_garden_domains
+        if payload.redirect_url is not None:
+            p.redirect_url = payload.redirect_url
+        if payload.welcome_message is not None:
+            p.welcome_message = payload.welcome_message
+        try:
+            await persist_config(settings)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save portal config: {e}") from e
     return {"message": "Portal config updated", "portal_type": p.portal_type}
 
 
@@ -190,7 +170,10 @@ async def web_login(payload: LoginPayload, request: Request, db: AsyncSession = 
     """Authenticate via username/password (portal_type == web_login)."""
     if settings.portal.portal_type != "web_login":
         raise HTTPException(400, "Web login is not enabled on this portal")
-    if payload.username != settings.portal.login_username or payload.password != settings.portal.login_password:
+    # Constant-time comparison to avoid leaking credentials via response timing.
+    user_ok = secrets.compare_digest(payload.username, settings.portal.login_username or "")
+    pass_ok = secrets.compare_digest(payload.password, settings.portal.login_password or "")
+    if not (user_ok and pass_ok):
         raise HTTPException(401, "Invalid credentials")
     client_ip = request.client.host if request.client else None
     if not client_ip:

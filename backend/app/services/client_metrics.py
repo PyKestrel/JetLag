@@ -9,6 +9,7 @@ Degrades gracefully: on non-Linux hosts or when accounting is unavailable the
 service simply reports no data.
 """
 
+import asyncio
 import logging
 import platform
 import subprocess
@@ -19,6 +20,11 @@ logger = logging.getLogger("jetlag.client_metrics")
 
 _IS_LINUX = platform.system() == "Linux"
 _CONNTRACK_PATH = "/proc/net/nf_conntrack"
+
+# Hard cap on conntrack lines parsed per sample. A busy NAT box can hold
+# hundreds of thousands of flows; parsing an unbounded file on the request
+# path (even in a worker thread) burns CPU and memory for little benefit.
+_MAX_CONNTRACK_LINES = 200_000
 
 # Previous per-flow byte totals: flow_key -> (orig_bytes, reply_bytes)
 _prev_flows: dict[str, tuple[int, int]] = {}
@@ -58,8 +64,18 @@ def _read_flows() -> dict[str, tuple[str, int, int]]:
     """
     flows: dict[str, tuple[str, int, int]] = {}
     try:
+        # Stream the file and stop at the cap instead of slurping it whole —
+        # /proc/net/nf_conntrack has no reliable size to stat ahead of time.
+        lines: list[str] = []
         with open(_CONNTRACK_PATH, "r") as fh:
-            lines = fh.readlines()
+            for i, line in enumerate(fh):
+                if i >= _MAX_CONNTRACK_LINES:
+                    logger.warning(
+                        "conntrack table exceeded %s lines; truncating sample",
+                        _MAX_CONNTRACK_LINES,
+                    )
+                    break
+                lines.append(line)
     except OSError:
         return flows
 
@@ -101,8 +117,18 @@ def _read_flows() -> dict[str, tuple[str, int, int]]:
 
 class ClientMetricsService:
     @staticmethod
-    def sample() -> dict:
+    async def sample() -> dict:
         """Compute per-client throughput since the previous call.
+
+        The conntrack read + parse (and the best-effort ``sysctl`` accounting
+        toggle) are blocking, so they run in a worker thread to keep the event
+        loop free.
+        """
+        return await asyncio.to_thread(ClientMetricsService._sample_sync)
+
+    @staticmethod
+    def _sample_sync() -> dict:
+        """Blocking implementation of :meth:`sample`. Runs in a thread.
 
         Returns ``{ "supported": bool, "clients": { ip: {rx_bps, tx_bps} } }``.
         ``rx`` is download (to the client), ``tx`` is upload (from the client).

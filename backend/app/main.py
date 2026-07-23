@@ -83,8 +83,9 @@ async def lifespan(app: FastAPI):
     if cfg.setup_completed and platform.system() == "Linux":
         # Clean up orphaned VLAN sub-interfaces from previous sessions
         try:
+            import asyncio
             from app.routers.setup import _cleanup_orphaned_vlans
-            _cleanup_orphaned_vlans()
+            await asyncio.to_thread(_cleanup_orphaned_vlans)
             logger.info("Orphaned VLAN cleanup completed")
         except Exception as e:
             logger.error(f"Failed to clean up orphaned VLANs: {e}")
@@ -131,11 +132,8 @@ async def lifespan(app: FastAPI):
 
         # Enable IP forwarding
         try:
-            import subprocess
-            subprocess.run(
-                ["sysctl", "-w", "net.ipv4.ip_forward=1"],
-                capture_output=True, timeout=5,
-            )
+            from app.services.command import run_argv
+            await run_argv(["sysctl", "-w", "net.ipv4.ip_forward=1"], timeout=5)
             logger.info("IP forwarding enabled")
         except Exception as e:
             logger.error(f"Failed to enable IP forwarding: {e}")
@@ -195,12 +193,9 @@ async def lifespan(app: FastAPI):
         # Remove virtual AP interface if hotspot mode
         if cfg.wireless.hotspot_mode:
             try:
-                import subprocess
+                from app.services.command import run_argv
                 ap_iface = cfg.wireless.virtual_interface or "ap0"
-                subprocess.run(
-                    ["iw", "dev", ap_iface, "del"],
-                    capture_output=True, timeout=5,
-                )
+                await run_argv(["iw", "dev", ap_iface, "del"], timeout=5)
                 logger.info(f"Virtual AP interface {ap_iface} removed")
             except Exception as e:
                 logger.error(f"Failed to remove virtual AP interface: {e}")
@@ -213,11 +208,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow frontend from any host (dev + LAN access)
+# CORS — allow the frontend from any host (dev + LAN access).
+#
+# Auth is carried in the ``Authorization: Bearer`` header, not cookies, so we
+# do NOT need (and must not set) ``allow_credentials=True``. The wildcard
+# origin combined with credentials is rejected by the CORS spec and browsers,
+# and would be a needless security smell; dropping credentials keeps the
+# wildcard valid and the Bearer-token flow working unchanged.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -329,9 +330,25 @@ async def captive_portal_middleware(request: Request, call_next):
         client_ip = request.client.host if request.client else None
         if client_ip:
             try:
+                from app.services.firewall import FirewallService
+                from app.services.ip_cache import authed_ip_cache
+
+                # Fast path: recently-authenticated IP — skip the DB round-trip
+                # that would otherwise run for every DNAT'd sub-request.
+                cached_mac = authed_ip_cache.get(client_ip)
+                if cached_mac is not None:
+                    await FirewallService.allow_client(client_ip, cached_mac)
+                    retry_html = (
+                        "<html><head><meta charset='utf-8'>"
+                        "<title>Reconnecting...</title></head><body>"
+                        "<p>Session restored, reconnecting...</p>"
+                        "<script>setTimeout(function(){location.reload()},3000);</script>"
+                        "</body></html>"
+                    )
+                    return HTMLResponse(content=retry_html, status_code=200)
+
                 from app.database import async_session
                 from app.models.client import Client, AuthState
-                from app.services.firewall import FirewallService
                 from sqlalchemy import select
 
                 async with async_session() as db:
@@ -342,6 +359,8 @@ async def captive_portal_middleware(request: Request, call_next):
                     if client and client.auth_state == AuthState.AUTHENTICATED:
                         # Re-add to nftables (refreshes 24h timeout)
                         await FirewallService.allow_client(client.ip_address, client.mac_address)
+                        # Cache so repeat sub-requests skip the DB for a short TTL.
+                        authed_ip_cache.set(client.ip_address, client.mac_address)
                         # Return a small page that waits for conntrack flush then retries.
                         # We can't redirect immediately because the DNAT conntrack entry
                         # is still active and would loop back here.
@@ -401,6 +420,22 @@ async def captive_portal_middleware(request: Request, call_next):
         },
     )
 
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "service": "jetlag", "version": __version__}
+
+
+@app.get("/api/version")
+async def version_info():
+    return get_version_info()
+
+
+# ── Static file mounts ───────────────────────────────────────────────
+# IMPORTANT: these MUST be registered last. The catch-all ``/`` mount below
+# shadows every route declared after it, so defining API routes (e.g.
+# /api/health, /api/version) afterwards would make them 404 as soon as the
+# frontend is built. Keep all @app.get/@app.post and include_router calls above.
+
 # Serve captive portal static files
 portal_path = Path(__file__).parent.parent.parent / "portal"
 if portal_path.exists():
@@ -410,13 +445,3 @@ if portal_path.exists():
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
-
-
-@app.get("/api/health")
-async def health_check():
-    return {"status": "ok", "service": "jetlag", "version": __version__}
-
-
-@app.get("/api/version")
-async def version_info():
-    return get_version_info()

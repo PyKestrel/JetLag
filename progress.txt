@@ -1,0 +1,76 @@
+JetLag Performance / Architecture / Bug-Fix Plan — Progress
+===========================================================
+
+How to run backend tests (Windows or Linux):
+    cd backend
+    pip install -r requirements-dev.txt
+    python -m pytest tests/
+
+Phase 0 — Test & Tooling Baseline .......... DONE
+  - backend/pytest.ini (asyncio auto mode)
+  - backend/tests/conftest.py: temp SQLite + temp jetlag.yaml + ASGI httpx client
+    + fake_commands recording runner fixture
+  - app/services/command.py: central async command runner (run_argv/run_shell)
+    with set_runner() test hook
+  - tests/test_smoke.py, tests/test_command.py — 7 passing
+
+Phase 1 — Backend Performance ............... DONE
+  [x] main.py lifespan sysctl + iw del -> async run_argv; _cleanup_orphaned_vlans -> to_thread
+  [x] setup.py sync subprocess sites -> async (run_argv / _run_cmd->run_shell / to_thread helpers)
+  [x] client_metrics.py -> async sample() via asyncio.to_thread + conntrack line cap (200k)
+  [x] process.py sync systemctl (is_systemd_managed) -> asyncio.to_thread at async call sites
+  [x] _persist_config -> centralized async + atomic write (see Phase 2)
+  [x] overview.py 6 COUNT queries -> 2 grouped queries + 1
+  [x] captive-portal middleware -> short-TTL authed-IP cache (app/services/ip_cache.py)
+  [x] firewall/dnsmasq _run routed through central command runner (fakeable)
+  Tests: test_overview, test_client_metrics, test_ip_cache, test_middleware_cache
+
+Phase 2 — Architecture & Security ........... DONE
+  [x] config_lock (asyncio.Lock) around settings mutate+persist in settings.py
+  [x] centralized serialize_config + persist_config (atomic temp-file + os.replace, to_thread)
+  [x] setup._persist_config + settings.update_settings now use the centralized writer
+  [x] legacy _sync_legacy: documented + debug-logs multi-port desync risk
+  [x] CORS: dropped allow_credentials (was wildcard+credentials, invalid); Bearer flow unchanged
+  Tests: test_config_persist (atomic/concurrent), test_cors
+
+Phase 3 — Frontend Performance .............. FOUNDATION DONE (page migration ongoing)
+  [x] Added @tanstack/react-query; QueryClientProvider in main.tsx
+  [x] lib/queryClient.ts: shared client (staleTime 5s, no background polling) + queryKeys
+  [x] hooks/useQueries.ts: overview/metrics/clients hooks (declarative refetchInterval)
+  [x] MetricsPanel migrated off manual setInterval polling -> useQuery
+  [x] App.tsx: route-level React.lazy + Suspense code-splitting (every page now its own chunk)
+  [x] npm install + `npm run build` verified green (ProfilesPage/RouterPage/etc split out)
+  [ ] Remaining: migrate other pages (Clients/Profiles/Router/Settings/Wireless/Replay/etc)
+      off useApi + raw setInterval to the useQueries pattern (incremental, per-page)
+  Fixed pre-existing TS error in WirelessPage.tsx (cast via unknown).
+
+Phase 4 — Bug Hunt & E2E .................... IN PROGRESS
+  [x] BUG (P0): catch-all `/` StaticFiles mount was registered BEFORE /api/health &
+      /api/version, so both 404'd in every built deployment (frontend/dist present).
+      Also broke the post-update health check. Fixed by moving the API routes above
+      the static mounts in main.py + regression test
+      (test_smoke::test_catch_all_static_mount_is_last).
+  [x] BUG (P1, multi-port): NetworkService.get_lan_neighbours() filtered ARP entries
+      on the legacy single settings.network.lan_interface, so /clients/sync-leases
+      missed static-IP clients on secondary LAN ports / VLAN sub-interfaces. Now uses
+      settings.all_lan_interfaces() with legacy fallback. Tests: test_network.py.
+  [x] BUG (P2, consistency/race): portal.py wrote config via its own non-atomic,
+      non-locked read-modify-write (_persist_portal_to_yaml), bypassing the Phase 2
+      config_lock + atomic writer — could clobber concurrent config writes. Now goes
+      through config_lock + persist_config(). Tests: test_portal.py.
+  [x] HARDENING: portal web-login password/username now compared with
+      secrets.compare_digest (constant-time) instead of !=.
+  [x] Routed NetworkService._run through the central command runner (fakeable),
+      matching firewall/dnsmasq; dropped now-unused asyncio import.
+  Reviewed (no action needed): scheduler tick/due logic, firewall allow/intercept +
+  cache invalidation, captive-portal middleware self-heal, dnsmasq lease parsing,
+  clients auth/deauth/sync flows.
+
+Pending Linux-only QA (cannot run from Windows dev box):
+  - Setup: complete setup -> verify `sysctl net.ipv4.ip_forward` == 1, `ip addr` on LAN port,
+    `nft list ruleset` has jetlag table, dnsmasq active.
+  - LAN port add/edit/remove with VLAN -> verify `ip -d link show <iface>.<vlan>` created/deleted.
+  - Captive portal: authenticate a client, let nft timeout lapse, re-request -> "Reconnecting"
+    page appears and client is re-added to `nft list set inet jetlag authenticated_ips`.
+  - Deauthenticate a client -> confirm it is NOT re-allowed within the 30s cache TTL.
+  - Metrics: /api/metrics/clients returns per-client rates under load without stalling other reqs.

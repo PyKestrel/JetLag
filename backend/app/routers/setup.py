@@ -14,6 +14,7 @@ from app.config import (
     settings, NetworkConfig, DHCPConfig, DNSConfig, WANPort, LANPort,
     PortDHCPConfig, WirelessConfig, MTU_MIN, MTU_MAX, validate_mtu,
 )
+from app.services.command import run_argv, run_shell
 from app.services.dnsmasq import DnsmasqService
 from app.services.firewall import FirewallService
 from app.services.impairment import ImpairmentService
@@ -220,7 +221,7 @@ async def get_setup_status():
 @router.get("/interfaces")
 async def get_interfaces():
     """List available network interfaces for WAN/LAN selection."""
-    interfaces = _detect_interfaces()
+    interfaces = await asyncio.to_thread(_detect_interfaces)
     return {"interfaces": interfaces}
 
 
@@ -278,26 +279,14 @@ def _cleanup_orphaned_vlans():
         logger.warning(f"Failed to clean up orphaned VLAN interfaces: {e}")
 
 
-def _persist_config():
-    """Serialize the current in-memory settings to jetlag.yaml."""
-    config_data = {
-        "setup_completed": settings.setup_completed,
-        "wan_ports": [p.model_dump() for p in settings.wan_ports],
-        "lan_ports": [p.model_dump() for p in settings.lan_ports],
-        "network": settings.network.model_dump(),
-        "dhcp": settings.dhcp.model_dump(),
-        "vlans": [v.model_dump() for v in settings.vlans],
-        "dns": settings.dns.model_dump(),
-        "portal": settings.portal.model_dump(),
-        "admin": settings.admin.model_dump(),
-        "wireless": settings.wireless.model_dump(),
-        "captures": settings.captures.model_dump(),
-        "logging": settings.logging.model_dump(),
-    }
-    path = _config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+async def _persist_config():
+    """Atomically serialize the current in-memory settings to jetlag.yaml.
+
+    Delegates to the centralized, non-blocking, crash-safe writer in
+    ``app.config`` (temp file + os.replace, run in a worker thread).
+    """
+    from app.config import persist_config
+    await persist_config(settings)
 
 
 async def _configure_lan_port(lp: LANPort):
@@ -359,14 +348,12 @@ async def _configure_wan_port(wp: WANPort) -> None:
 
 
 async def _run_cmd(cmd: str) -> tuple[str, str, int]:
-    """Run a shell command asynchronously (non-blocking)."""
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
+    """Run a shell command asynchronously (non-blocking).
+
+    Delegates to the central command runner so it is non-blocking and can be
+    intercepted by the test fake.
+    """
+    return await run_shell(cmd)
 
 
 async def _create_virtual_ap(wan_iface: str, ap_iface: str = "ap0") -> bool:
@@ -447,12 +434,12 @@ async def complete_setup(payload: SetupRequest):
     """
     # ── Hotspot mode: WAN == LAN is OK because we create a virtual AP iface
     if payload.hotspot_mode:
-        if not _is_wlan_interface(payload.wan_interface):
+        if not await asyncio.to_thread(_is_wlan_interface, payload.wan_interface):
             raise HTTPException(
                 status_code=400,
                 detail=f"{payload.wan_interface} is not a wireless interface.",
             )
-        if not _wlan_supports_ap(payload.wan_interface):
+        if not await asyncio.to_thread(_wlan_supports_ap, payload.wan_interface):
             raise HTTPException(
                 status_code=400,
                 detail=f"{payload.wan_interface} does not support AP mode.",
@@ -522,7 +509,7 @@ async def complete_setup(payload: SetupRequest):
 
     # Persist to YAML
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -604,10 +591,7 @@ async def complete_setup(payload: SetupRequest):
 
         # 5. Enable IP forwarding
         try:
-            subprocess.run(
-                ["sysctl", "-w", "net.ipv4.ip_forward=1"],
-                capture_output=True, timeout=5,
-            )
+            await run_argv(["sysctl", "-w", "net.ipv4.ip_forward=1"], timeout=5)
             services_started.append("ip_forwarding")
             logger.info("IP forwarding enabled")
         except Exception as e:
@@ -673,7 +657,7 @@ async def add_wan_port(payload: AddWANPortRequest):
     settings.wan_ports.append(port)
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -701,7 +685,7 @@ async def remove_wan_port(interface: str):
         raise HTTPException(status_code=404, detail=f"WAN port {interface} not found")
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -736,7 +720,7 @@ async def edit_wan_port(interface: str, payload: EditWANPortRequest):
     port.mtu = payload.mtu
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -784,7 +768,7 @@ async def add_lan_port(payload: AddLANPortRequest):
     settings.lan_ports.append(port)
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -820,7 +804,7 @@ async def remove_lan_port(interface: str):
         raise HTTPException(status_code=404, detail=f"LAN port {interface} not found")
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -829,9 +813,8 @@ async def remove_lan_port(interface: str):
         for p in removed:
             if p.vlan_id is not None:
                 try:
-                    subprocess.run(
-                        ["ip", "link", "delete", p.effective_interface],
-                        capture_output=True, timeout=5,
+                    await run_argv(
+                        ["ip", "link", "delete", p.effective_interface], timeout=5
                     )
                     logger.info(f"VLAN sub-interface {p.effective_interface} removed")
                 except Exception as e:
@@ -896,7 +879,7 @@ async def edit_lan_port(interface: str, payload: AddLANPortRequest):
     settings.lan_ports[idx] = new_port
 
     try:
-        _persist_config()
+        await _persist_config()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
@@ -905,9 +888,8 @@ async def edit_lan_port(interface: str, payload: AddLANPortRequest):
         if old.effective_interface != new_effective:
             if old.vlan_id is not None:
                 try:
-                    subprocess.run(
-                        ["ip", "link", "delete", old.effective_interface],
-                        capture_output=True, timeout=5,
+                    await run_argv(
+                        ["ip", "link", "delete", old.effective_interface], timeout=5
                     )
                     logger.info(f"Old VLAN sub-interface {old.effective_interface} removed")
                 except Exception as e:

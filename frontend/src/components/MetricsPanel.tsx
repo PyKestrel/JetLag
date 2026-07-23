@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Activity, ArrowDown, ArrowUp, Users } from 'lucide-react'
 import {
-  getInterfaceMetrics,
-  getMetricsHistory,
-  getMetricsRange,
-  type MetricsSnapshot,
-  type MetricsHistory,
-  type MetricsRange,
-} from '@/lib/api'
+  useInterfaceMetrics,
+  useMetricsHistory,
+  useMetricsRange,
+} from '@/hooks/useQueries'
 
 type RangeKey = 'live' | '60' | '360' | '1440'
 
@@ -54,63 +51,17 @@ function Sparkline({
 }
 
 export default function MetricsPanel() {
-  const [snapshot, setSnapshot] = useState<MetricsSnapshot | null>(null)
-  const [history, setHistory] = useState<MetricsHistory | null>(null)
-  const [rangeData, setRangeData] = useState<MetricsRange | null>(null)
   const [range, setRange] = useState<RangeKey>('live')
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const rangeTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Live snapshot (current rates + per-interface table) — always polling.
-  useEffect(() => {
-    let cancelled = false
-    async function poll() {
-      try {
-        const [snap, hist] = await Promise.all([getInterfaceMetrics(), getMetricsHistory()])
-        if (!cancelled) {
-          setSnapshot(snap)
-          setHistory(hist)
-        }
-      } catch {
-        /* transient — keep last values */
-      }
-    }
-    poll()
-    timer.current = setInterval(poll, 2000)
-    return () => {
-      cancelled = true
-      if (timer.current) clearInterval(timer.current)
-    }
-  }, [])
+  // Live snapshot (current rates + per-interface table) — polled via TanStack
+  // Query; polling pauses automatically when the tab is hidden.
+  const { data: snapshot } = useInterfaceMetrics(2000)
+  const { data: history } = useMetricsHistory(2000)
+  // Historical range — only enabled (and only polling) for a non-live range.
+  const isLive = range === 'live'
+  const { data: rangeData } = useMetricsRange(Number(isLive ? 60 : range), !isLive)
 
-  // Historical range fetch — only active when a non-live range is selected.
-  useEffect(() => {
-    if (rangeTimer.current) {
-      clearInterval(rangeTimer.current)
-      rangeTimer.current = null
-    }
-    if (range === 'live') {
-      setRangeData(null)
-      return
-    }
-    let cancelled = false
-    async function fetchRange() {
-      try {
-        const data = await getMetricsRange(Number(range))
-        if (!cancelled) setRangeData(data)
-      } catch {
-        /* transient — keep last values */
-      }
-    }
-    fetchRange()
-    rangeTimer.current = setInterval(fetchRange, 15000)
-    return () => {
-      cancelled = true
-      if (rangeTimer.current) clearInterval(rangeTimer.current)
-    }
-  }, [range])
-
-  const chartSamples = range === 'live' ? history?.samples : rangeData?.samples
+  const chartSamples = isLive ? history?.samples : rangeData?.samples
   const rxSeries = (chartSamples || []).map((s) => s.rx_bps)
   const txSeries = (chartSamples || []).map((s) => s.tx_bps)
   const agg = snapshot?.aggregate

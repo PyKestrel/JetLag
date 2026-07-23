@@ -1,10 +1,19 @@
+import asyncio
+import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger("jetlag.config")
+
+# Serializes all mutate+persist sequences on the global ``settings`` singleton
+# so two concurrent requests can't interleave writes and corrupt jetlag.yaml.
+config_lock = asyncio.Lock()
 
 
 # ── MTU bounds ───────────────────────────────────────────────────
@@ -266,7 +275,21 @@ class AppConfig(BaseModel):
                     ),
                 ))
 
-        # Keep legacy fields in sync with first entries
+        # Keep legacy fields in sync with the *first* entries only.
+        #
+        # WARNING: the legacy ``network``/``dhcp`` scalars can represent a
+        # single port. When more than one WAN/LAN port is configured they
+        # mirror only ``[0]``; any code still reading ``settings.network.*`` or
+        # ``settings.dhcp.*`` therefore sees just the primary port. New code
+        # must iterate ``wan_ports`` / ``lan_ports`` instead. We log here so a
+        # silent multi-port desync is at least visible in the logs.
+        if len(self.wan_ports) > 1 or len(self.lan_ports) > 1:
+            logger.debug(
+                "Multi-port config (%d WAN, %d LAN): legacy network/dhcp fields "
+                "mirror only the first port; consumers must use the port lists.",
+                len(self.wan_ports),
+                len(self.lan_ports),
+            )
         if self.wan_ports:
             self.network.wan_interface = self.wan_ports[0].interface
         if self.lan_ports:
@@ -298,20 +321,83 @@ class AppConfig(BaseModel):
         return [p.interface for p in self.wan_ports if p.enabled]
 
 
-def load_config(config_path: Optional[str] = None) -> AppConfig:
-    if config_path is None:
-        config_path = os.environ.get(
+def config_path() -> Path:
+    """Resolve the on-disk config path (honors the JETLAG_CONFIG override)."""
+    return Path(
+        os.environ.get(
             "JETLAG_CONFIG",
             str(Path(__file__).parent.parent.parent / "config" / "jetlag.yaml"),
         )
+    )
 
-    path = Path(config_path)
+
+def load_config(config_path_arg: Optional[str] = None) -> AppConfig:
+    path = Path(config_path_arg) if config_path_arg else config_path()
     if path.exists():
         with open(path, "r") as f:
             raw = yaml.safe_load(f) or {}
         return AppConfig(**raw)
 
     return AppConfig()
+
+
+def serialize_config(cfg: "AppConfig") -> dict:
+    """Return the canonical YAML-serializable dict for *cfg*.
+
+    Single source of truth for what gets written to jetlag.yaml — used by both
+    the setup and settings routers so no section is ever accidentally dropped.
+    """
+    return {
+        "setup_completed": cfg.setup_completed,
+        "wan_ports": [p.model_dump() for p in cfg.wan_ports],
+        "lan_ports": [p.model_dump() for p in cfg.lan_ports],
+        "network": cfg.network.model_dump(),
+        "dhcp": cfg.dhcp.model_dump(),
+        "vlans": [v.model_dump() for v in cfg.vlans],
+        "dns": cfg.dns.model_dump(),
+        "portal": cfg.portal.model_dump(),
+        "admin": cfg.admin.model_dump(),
+        "updates": cfg.updates.model_dump(),
+        "wireless": cfg.wireless.model_dump(),
+        "captures": cfg.captures.model_dump(),
+        "logging": cfg.logging.model_dump(),
+    }
+
+
+def _atomic_write_yaml(path: Path, data: dict) -> None:
+    """Write *data* to *path* atomically (temp file in same dir + os.replace).
+
+    A crash mid-write can never leave a half-written jetlag.yaml: the rename is
+    atomic on POSIX and Windows, so readers always see either the old or the
+    new complete file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".jetlag-", suffix=".yaml.tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+async def persist_config(cfg: Optional["AppConfig"] = None) -> dict:
+    """Serialize *cfg* (default: the global singleton) and write it atomically.
+
+    The blocking file IO runs in a worker thread so the event loop is never
+    stalled. Callers that mutate ``settings`` and then persist should hold
+    :data:`config_lock` across the whole mutate+persist to stay race-free.
+    """
+    cfg = cfg if cfg is not None else settings
+    data = serialize_config(cfg)
+    await asyncio.to_thread(_atomic_write_yaml, config_path(), data)
+    return data
 
 
 settings = load_config()

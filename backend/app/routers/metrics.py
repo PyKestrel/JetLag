@@ -41,4 +41,4 @@ async def metrics_range(minutes: int = Query(60, ge=1, le=1440)):
 @router.get("/clients")
 async def client_metrics():
     """Per-client live upload/download rates keyed by client IP."""
-    return ClientMetricsService.sample()
+    return await ClientMetricsService.sample()

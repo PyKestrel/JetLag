@@ -18,13 +18,8 @@ class FirewallService:
 
     @staticmethod
     async def _run(cmd: str) -> tuple[str, str, int]:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return stdout.decode(), stderr.decode(), proc.returncode
+        from app.services.command import run_shell
+        return await run_shell(cmd)
 
     @staticmethod
     async def _apply_ruleset(ruleset: str) -> tuple[str, str, int]:
@@ -199,6 +194,11 @@ table inet jetlag {{
     @staticmethod
     async def intercept_client(ip: str, mac: Optional[str] = None):
         """Remove client IP from authenticated set, re-enabling interception."""
+        # Drop any cached "authenticated" fast-path entry so the middleware
+        # can't immediately re-allow a client we're revoking.
+        from app.services.ip_cache import authed_ip_cache
+        authed_ip_cache.invalidate(ip)
+
         cmd = f"nft delete element inet jetlag authenticated_ips {{ {ip} }}"
         out, err, rc = await FirewallService._run(cmd)
         if rc != 0:
@@ -215,6 +215,9 @@ table inet jetlag {{
     @staticmethod
     async def reset_all():
         """Remove all IPs from the authenticated set."""
+        from app.services.ip_cache import authed_ip_cache
+        authed_ip_cache.clear()
+
         cmd = "nft flush set inet jetlag authenticated_ips"
         out, err, rc = await FirewallService._run(cmd)
         if rc != 0:

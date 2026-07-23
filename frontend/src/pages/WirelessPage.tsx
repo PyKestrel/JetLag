@@ -113,7 +113,7 @@ export default function WirelessPage() {
     try {
       const changes: Record<string, unknown> = {}
       for (const [key, val] of Object.entries(editConfig)) {
-        if (val !== (config as Record<string, unknown>)[key]) {
+        if (val !== (config as unknown as Record<string, unknown>)[key]) {
           changes[key] = val
         }
       }

@@ -13,34 +13,29 @@ router = APIRouter(prefix="/api/overview", tags=["overview"])
 
 @router.get("")
 async def get_overview(db: AsyncSession = Depends(get_db)):
-    # Client counts
-    total_clients = (await db.execute(select(func.count(Client.id)))).scalar()
-    pending_clients = (
+    # Client counts — one grouped query instead of three round-trips.
+    client_rows = (
         await db.execute(
-            select(func.count(Client.id)).where(
-                Client.auth_state == AuthState.PENDING
+            select(Client.auth_state, func.count(Client.id)).group_by(
+                Client.auth_state
             )
         )
-    ).scalar()
-    auth_clients = (
-        await db.execute(
-            select(func.count(Client.id)).where(
-                Client.auth_state == AuthState.AUTHENTICATED
-            )
-        )
-    ).scalar()
+    ).all()
+    client_counts = {state: count for state, count in client_rows}
+    total_clients = sum(client_counts.values())
+    pending_clients = client_counts.get(AuthState.PENDING, 0)
+    auth_clients = client_counts.get(AuthState.AUTHENTICATED, 0)
 
-    # Profile counts
-    total_profiles = (
-        await db.execute(select(func.count(ImpairmentProfile.id)))
-    ).scalar()
-    active_profiles = (
+    # Profile counts — one grouped query instead of two round-trips.
+    profile_rows = (
         await db.execute(
-            select(func.count(ImpairmentProfile.id)).where(
-                ImpairmentProfile.enabled == True
+            select(ImpairmentProfile.enabled, func.count(ImpairmentProfile.id)).group_by(
+                ImpairmentProfile.enabled
             )
         )
-    ).scalar()
+    ).all()
+    total_profiles = sum(count for _, count in profile_rows)
+    active_profiles = sum(count for enabled, count in profile_rows if enabled)
 
     # Active captures
     active_captures = (

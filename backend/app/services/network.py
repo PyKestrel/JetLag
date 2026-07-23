@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import platform
 from typing import Optional
@@ -15,13 +14,8 @@ class NetworkService:
 
     @staticmethod
     async def _run(cmd: str) -> tuple[str, str, int]:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return stdout.decode(), stderr.decode(), proc.returncode
+        from app.services.command import run_shell
+        return await run_shell(cmd)
 
     @staticmethod
     async def arp_lookup(ip: str) -> Optional[str]:
@@ -98,10 +92,18 @@ class NetworkService:
 
     @staticmethod
     async def get_lan_neighbours() -> list[dict]:
-        """Return ARP entries filtered to the LAN interface only."""
-        lan = settings.network.lan_interface
+        """Return ARP entries filtered to the configured LAN interfaces.
+
+        Uses the full multi-port list (every enabled LAN port and VLAN
+        sub-interface), not just the legacy ``network.lan_interface`` scalar —
+        otherwise client discovery would miss hosts on secondary LAN ports.
+        """
+        lan_ifaces = set(settings.all_lan_interfaces())
+        # Fall back to the legacy scalar if the port list is somehow empty.
+        if not lan_ifaces and settings.network.lan_interface:
+            lan_ifaces = {settings.network.lan_interface}
         all_entries = await NetworkService.get_arp_table()
-        return [e for e in all_entries if e.get("interface") == lan]
+        return [e for e in all_entries if e.get("interface") in lan_ifaces]
 
     @staticmethod
     async def ping_sweep(subnet: Optional[str] = None) -> int:

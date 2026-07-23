@@ -37,7 +37,7 @@ async def restart_service(delay_seconds: float = 1.5) -> bool:
     Returns True if the restart command was dispatched, False if not
     running under systemd.
     """
-    if not is_systemd_managed():
+    if not await asyncio.to_thread(is_systemd_managed):
         logger.warning("Not running under systemd — cannot auto-restart")
         return False
 
@@ -59,7 +59,7 @@ async def restart_service(delay_seconds: float = 1.5) -> bool:
 
 async def stop_service() -> bool:
     """Stop the jetlag systemd service."""
-    if not is_systemd_managed():
+    if not await asyncio.to_thread(is_systemd_managed):
         return False
 
     logger.info("Stopping jetlag.service...")
